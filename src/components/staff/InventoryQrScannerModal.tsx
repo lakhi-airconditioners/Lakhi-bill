@@ -104,6 +104,8 @@ export const InventoryQrScannerModal: React.FC<InventoryQrScannerModalProps> = (
   // Scanned status
   const [scannedResult, setScannedResult] = useState<ParsedQrResult | null>(null);
   const [matchedItem, setMatchedItem] = useState<InventoryItem | null>(null);
+  const [matchedItems, setMatchedItems] = useState<InventoryItem[]>([]);
+  const [archivedMatchCount, setArchivedMatchCount] = useState<number>(0);
   const [matchedOrder, setMatchedOrder] = useState<{
     shipment?: Shipment;
     invoice?: Invoice;
@@ -249,20 +251,40 @@ export const InventoryQrScannerModal: React.FC<InventoryQrScannerModalProps> = (
     return result;
   };
 
-  // Check if parsed QR matches any existing item in inventory
-  const findMatchingItem = (parsed: ParsedQrResult): InventoryItem | null => {
-    const rawClean = parsed.raw.toLowerCase();
-    const snClean = (parsed.serialNo || '').toLowerCase();
-    const modelClean = (parsed.modelNo || '').toLowerCase();
+  // Check if parsed QR matches existing items in inventory (returns ALL matching products in stock)
+  // Filters out items that left the store and are marked delivered & installed / archived
+  const findMatchingItems = (parsed: ParsedQrResult): InventoryItem[] => {
+    const rawClean = parsed.raw.toLowerCase().trim();
+    const snClean = (parsed.serialNo || '').toLowerCase().trim();
+    const modelClean = (parsed.modelNo || '').toLowerCase().trim();
 
-    for (const item of inventory) {
-      if (item.id.toLowerCase() === rawClean) return item;
-      if (item.serialNo && item.serialNo.toLowerCase() === rawClean) return item;
-      if (item.modelNo && item.modelNo.toLowerCase() === rawClean) return item;
-      if (snClean && item.serialNo && item.serialNo.toLowerCase() === snClean) return item;
-      if (modelClean && item.modelNo && item.modelNo.toLowerCase() === modelClean) return item;
-    }
-    return null;
+    return inventory.filter((item) => {
+      // Products that left store and are marked delivered & installed are archived and do NOT show in scanning
+      if (item.isArchived || item.status === 'ARCHIVED') return false;
+
+      const rawMatch = item.id.toLowerCase() === rawClean;
+      const stockIdMatch = item.stockId && item.stockId.toLowerCase() === rawClean;
+      const snMatch = item.serialNo && (item.serialNo.toLowerCase() === rawClean || (snClean && item.serialNo.toLowerCase() === snClean));
+      const modelMatch = item.modelNo && (item.modelNo.toLowerCase() === rawClean || (modelClean && item.modelNo.toLowerCase() === modelClean));
+      const barcodeMatch = item.barcode && (item.barcode.toLowerCase() === rawClean || (snClean && item.barcode.toLowerCase() === snClean));
+
+      return rawMatch || stockIdMatch || snMatch || modelMatch || barcodeMatch;
+    });
+  };
+
+  // Count items matching this barcode that have left the store and are archived
+  const countArchivedMatches = (parsed: ParsedQrResult): number => {
+    const rawClean = parsed.raw.toLowerCase().trim();
+    const snClean = (parsed.serialNo || '').toLowerCase().trim();
+    const modelClean = (parsed.modelNo || '').toLowerCase().trim();
+
+    return inventory.filter((item) => {
+      if (!item.isArchived && item.status !== 'ARCHIVED') return false;
+      const snMatch = item.serialNo && (item.serialNo.toLowerCase() === rawClean || (snClean && item.serialNo.toLowerCase() === snClean));
+      const modelMatch = item.modelNo && (item.modelNo.toLowerCase() === rawClean || (modelClean && item.modelNo.toLowerCase() === modelClean));
+      const stockIdMatch = item.stockId && item.stockId.toLowerCase() === rawClean;
+      return snMatch || modelMatch || stockIdMatch;
+    }).length;
   };
 
   // Check if parsed QR matches any Delivery (Shipment) or Invoice in the system
@@ -354,11 +376,14 @@ export const InventoryQrScannerModal: React.FC<InventoryQrScannerModalProps> = (
     stopCameraStream();
 
     const parsed = parseQrText(decodedString);
-    const found = findMatchingItem(parsed);
+    const foundList = findMatchingItems(parsed);
     const orderMatch = findMatchingDeliveryOrder(parsed);
+    const archivedCount = countArchivedMatches(parsed);
 
     setScannedResult(parsed);
-    setMatchedItem(found);
+    setMatchedItems(foundList);
+    setMatchedItem(foundList[0] || null);
+    setArchivedMatchCount(archivedCount);
     setMatchedOrder(orderMatch);
     setOrderUpdateFeedback(null);
 
@@ -686,8 +711,9 @@ export const InventoryQrScannerModal: React.FC<InventoryQrScannerModalProps> = (
       setQuickAddSuccess(true);
       // Re-query inventory match
       setTimeout(() => {
-        const found = findMatchingItem(scannedResult);
-        if (found) setMatchedItem(found);
+        const foundList = findMatchingItems(scannedResult);
+        setMatchedItems(foundList);
+        if (foundList[0]) setMatchedItem(foundList[0]);
       }, 300);
     } finally {
       setIsQuickAdding(false);
@@ -940,132 +966,162 @@ export const InventoryQrScannerModal: React.FC<InventoryQrScannerModalProps> = (
                 </div>
               )}
 
-              {/* 1. MATCH FOUND IN INVENTORY */}
-              {matchedItem ? (
+              {/* 1. MATCHES FOUND IN ACTIVE INVENTORY */}
+              {matchedItems.length > 0 ? (
                 <div className="bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/60 rounded-2xl p-4 sm:p-5 space-y-3.5">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="flex items-center gap-2">
-                      <div className="p-2 bg-emerald-600 text-white rounded-xl shadow-xs">
+                  <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3 pb-3 border-b border-emerald-200/60 dark:border-emerald-900/40">
+                    <div className="flex items-start gap-3">
+                      <div className="p-2.5 bg-emerald-600 text-white rounded-xl shadow-xs mt-0.5">
                         <CheckCircle2 className="w-5 h-5" />
                       </div>
                       <div>
-                        <span className="text-[10px] uppercase tracking-wider font-extrabold text-emerald-700 dark:text-emerald-300">
-                          Stock Item Found in Store!
+                        <span className="text-[10px] uppercase tracking-wider font-extrabold text-emerald-700 dark:text-emerald-300 block">
+                          Product Identified via Barcode Scan
                         </span>
-                        <h4 className="font-black text-slate-900 dark:text-white text-base">
-                          {matchedItem.name}
+                        <h4 className="font-black text-slate-900 dark:text-white text-base sm:text-lg">
+                          {matchedItems[0].name}
                         </h4>
+                        <div className="flex flex-wrap items-center gap-2 mt-1 text-xs text-slate-600 dark:text-slate-300">
+                          <span>Brand: <strong className="text-slate-900 dark:text-white">{matchedItems[0].brand}</strong></span>
+                          <span>•</span>
+                          <span>Model: <strong className="font-mono text-slate-900 dark:text-white">{matchedItems[0].modelNo}</strong></span>
+                        </div>
                       </div>
                     </div>
-                    <span
-                      className={`px-3 py-1 rounded-full text-xs font-black shrink-0 ${
-                        matchedItem.status === 'AVAILABLE'
-                          ? 'bg-emerald-600 text-white shadow-xs'
-                          : 'bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300'
-                      }`}
-                    >
-                      {matchedItem.status}
-                    </span>
-                  </div>
 
-                  {/* Item Details Grid */}
-                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 text-xs bg-white dark:bg-slate-900/90 p-3.5 rounded-xl border border-emerald-100 dark:border-emerald-900/40">
-                    <div>
-                      <span className="text-[10px] text-slate-400 block font-bold">Brand</span>
-                      <strong className="text-slate-900 dark:text-white font-semibold">{matchedItem.brand}</strong>
-                    </div>
-                    <div>
-                      <span className="text-[10px] text-slate-400 block font-bold">Model No</span>
-                      <strong className="text-slate-900 dark:text-white font-mono">{matchedItem.modelNo}</strong>
-                    </div>
-                    <div>
-                      <span className="text-[10px] text-slate-400 block font-bold">Selling Price</span>
-                      <strong className="text-emerald-600 dark:text-emerald-400 font-black">
-                        ₹{matchedItem.sellingPrice.toLocaleString('en-IN')}
-                      </strong>
-                    </div>
-                    <div>
-                      <span className="text-[10px] text-slate-400 block font-bold">Appliance Type</span>
-                      <span className="px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-[11px] font-bold">
-                        {matchedItem.type}
+                    <div className="flex sm:flex-col items-center sm:items-end justify-between gap-1.5 shrink-0 bg-white dark:bg-slate-900 sm:bg-transparent p-2.5 sm:p-0 rounded-xl border sm:border-0 border-emerald-100">
+                      <div>
+                        <span className="text-[10px] uppercase tracking-wider text-slate-400 font-bold block sm:text-right">Product Price</span>
+                        <span className="text-emerald-600 dark:text-emerald-400 font-black text-lg">
+                          ₹{matchedItems[0].sellingPrice.toLocaleString('en-IN')}
+                        </span>
+                      </div>
+                      <span className="px-3 py-1 rounded-full text-xs font-black bg-emerald-600 text-white shadow-xs">
+                        {matchedItems.filter((i) => i.status === 'AVAILABLE').length} Available in Stock
                       </span>
                     </div>
-                    <div className="col-span-2">
-                      <span className="text-[10px] text-slate-400 block font-bold">Serial Number</span>
-                      <span className="font-mono text-slate-800 dark:text-slate-200 font-bold flex items-center gap-1.5">
-                        <Barcode className="w-3.5 h-3.5 text-slate-400" />
-                        {matchedItem.serialNo || 'Not specified'}
-                        {matchedItem.serialNo && (
-                          <button
-                            type="button"
-                            onClick={() => {
-                              navigator.clipboard.writeText(matchedItem.serialNo);
-                              setCopiedText('serial');
-                              setTimeout(() => setCopiedText(null), 2000);
-                            }}
-                            className="text-slate-400 hover:text-slate-600 p-0.5"
-                            title="Copy Serial Number"
+                  </div>
+
+                  {/* Inform if any units with this barcode left store and were delivered */}
+                  {archivedMatchCount > 0 && (
+                    <div className="p-2.5 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-300 rounded-xl text-xs font-semibold flex items-center gap-2">
+                      <span>⚠️ Note: {archivedMatchCount} unit(s) with this barcode have left the store (Delivered & Installed) and are archived.</span>
+                    </div>
+                  )}
+
+                  {/* List of All Matching Stock Units */}
+                  <div className="space-y-3">
+                    {matchedItems.map((item, idx) => (
+                      <div
+                        key={item.id}
+                        className="bg-white dark:bg-slate-900/90 p-3.5 rounded-xl border border-emerald-100 dark:border-emerald-900/40 space-y-2.5"
+                      >
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex items-center gap-2">
+                            <span className="text-[10px] font-black px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
+                              Unit #{idx + 1}
+                            </span>
+                            <span className="font-mono text-xs font-black px-2 py-0.5 rounded-md bg-red-100 dark:bg-red-950/60 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-900/40">
+                              Stock ID: {item.stockId || `${item.serialNo || item.id}-${idx + 1}`}
+                            </span>
+                          </div>
+
+                          <span
+                            className={`px-2.5 py-0.5 rounded-full text-[10px] font-black ${
+                              item.status === 'AVAILABLE'
+                                ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'
+                                : 'bg-slate-100 text-slate-500'
+                            }`}
                           >
-                            {copiedText === 'serial' ? <Check className="w-3 h-3 text-emerald-600" /> : <Copy className="w-3 h-3" />}
-                          </button>
-                        )}
-                      </span>
-                    </div>
+                            {item.status}
+                          </span>
+                        </div>
+
+                        {/* Product details */}
+                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
+                          <div>
+                            <span className="text-[10px] text-slate-400 block font-bold">Brand & Model</span>
+                            <strong className="text-slate-900 dark:text-white font-mono">{item.brand} • {item.modelNo}</strong>
+                          </div>
+                          <div>
+                            <span className="text-[10px] text-slate-400 block font-bold">Selling Price</span>
+                            <strong className="text-emerald-600 dark:text-emerald-400 font-black">
+                              ₹{item.sellingPrice.toLocaleString('en-IN')}
+                            </strong>
+                          </div>
+                          <div className="col-span-2">
+                            <span className="text-[10px] text-slate-400 block font-bold">Carton Barcode / Serial No</span>
+                            <span className="font-mono text-slate-800 dark:text-slate-200 font-bold flex items-center gap-1.5">
+                              <Barcode className="w-3.5 h-3.5 text-slate-400" />
+                              {item.serialNo || 'Not specified'}
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Actions for this specific unit */}
+                        <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-slate-100 dark:border-slate-800">
+                          {item.status === 'AVAILABLE' && onBillItem && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                onBillItem(item);
+                                onClose();
+                              }}
+                              className="px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white rounded-lg text-xs font-bold shadow-xs flex items-center gap-1 transition-colors"
+                            >
+                              <ShoppingBag className="w-3 h-3" />
+                              + Bill This Unit
+                            </button>
+                          )}
+                          {onToggleItemSold && (
+                            <button
+                              type="button"
+                              onClick={() => onToggleItemSold(item.id)}
+                              className="px-3 py-1.5 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 rounded-lg text-xs font-bold hover:bg-slate-200 transition-colors"
+                            >
+                              {item.status === 'AVAILABLE' ? 'Mark Sold' : 'Mark Available'}
+                            </button>
+                          )}
+                          {onEditItem && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                onEditItem(item);
+                                onClose();
+                              }}
+                              className="px-3 py-1.5 bg-slate-100 dark:bg-slate-800 text-blue-600 rounded-lg text-xs font-bold hover:bg-slate-200 transition-colors flex items-center gap-1"
+                            >
+                              <Edit2 className="w-3.5 h-3.5" />
+                              Edit
+                            </button>
+                          )}
+                          {onHighlightItemInTable && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                onHighlightItemInTable(item.id);
+                                onClose();
+                              }}
+                              className="px-3 py-1.5 bg-slate-100 dark:bg-slate-800 text-slate-600 rounded-lg text-xs font-bold hover:bg-slate-200 transition-colors"
+                            >
+                              Locate in Table
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    ))}
                   </div>
-
-                  {/* Actions for this Found Item */}
-                  <div className="flex flex-wrap items-center gap-2 pt-1">
-                    {matchedItem.status === 'AVAILABLE' && onBillItem && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          onBillItem(matchedItem);
-                          onClose();
-                        }}
-                        className="px-3.5 py-2 bg-red-600 hover:bg-red-700 text-white rounded-xl text-xs font-bold shadow-xs flex items-center gap-1.5 transition-colors"
-                      >
-                        <ShoppingBag className="w-3.5 h-3.5" />
-                        + Bill / Invoice This Item
-                      </button>
-                    )}
-
-                    {onToggleItemSold && (
-                      <button
-                        type="button"
-                        onClick={() => onToggleItemSold(matchedItem.id)}
-                        className="px-3 py-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-slate-700 dark:text-slate-200 rounded-xl text-xs font-bold hover:bg-slate-100 transition-colors"
-                      >
-                        {matchedItem.status === 'AVAILABLE' ? 'Mark as Sold' : 'Mark as Available'}
-                      </button>
-                    )}
-
-                    {onEditItem && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          onEditItem(matchedItem);
-                          onClose();
-                        }}
-                        className="px-3 py-2 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-blue-600 dark:text-blue-400 rounded-xl text-xs font-bold hover:bg-slate-100 transition-colors flex items-center gap-1"
-                      >
-                        <Edit2 className="w-3.5 h-3.5" />
-                        Edit Stock Details
-                      </button>
-                    )}
-
-                    {onHighlightItemInTable && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          onHighlightItemInTable(matchedItem.id);
-                          onClose();
-                        }}
-                        className="px-3 py-2 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-700 dark:text-slate-300 rounded-xl text-xs font-bold transition-colors"
-                      >
-                        Locate in Stock Table
-                      </button>
-                    )}
+                </div>
+              ) : archivedMatchCount > 0 ? (
+                /* Product archived / out of store notice */
+                <div className="bg-amber-50 dark:bg-amber-950/30 border border-amber-300 dark:border-amber-800/60 rounded-2xl p-4 sm:p-5 space-y-2">
+                  <div className="flex items-center gap-2 font-bold text-amber-800 dark:text-amber-300 text-sm">
+                    <Boxes className="w-5 h-5 text-amber-600" />
+                    <span>Product Has Left the Store (Delivered & Installed)</span>
                   </div>
+                  <p className="text-xs text-slate-600 dark:text-slate-300">
+                    {archivedMatchCount} unit(s) matching this barcode were previously delivered & installed at the customer's site. They are marked as archived/out of store and do not appear in active inventory scanning.
+                  </p>
                 </div>
               ) : null}
 
@@ -1277,8 +1333,9 @@ export const InventoryQrScannerModal: React.FC<InventoryQrScannerModalProps> = (
                                 .then(() => {
                                   setQuickAddSuccess(true);
                                   setTimeout(() => {
-                                    const found = findMatchingItem(scannedResult);
-                                    if (found) setMatchedItem(found);
+                                    const foundList = findMatchingItems(scannedResult);
+                                    setMatchedItems(foundList);
+                                    if (foundList[0]) setMatchedItem(foundList[0]);
                                   }, 400);
                                 })
                                 .finally(() => setIsQuickAdding(false));

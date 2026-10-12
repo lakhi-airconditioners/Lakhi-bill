@@ -11,6 +11,7 @@ import {
   query,
   where,
   getDocs,
+  deleteField,
 } from 'firebase/firestore';
 import { onAuthStateChanged, signInWithPopup, signOut, User } from 'firebase/auth';
 import { db, auth, googleProvider } from '../firebase/config';
@@ -155,10 +156,13 @@ interface AppContextType {
     brand: string;
     serialNo: string;
     sellingPrice: number;
+    stockId?: string;
   }) => Promise<string>;
   updateInventoryItem: (id: string, data: Partial<InventoryItem>) => Promise<void>;
   markInventorySold: (id: string, invoiceId?: string) => Promise<void>;
   deleteInventoryItem: (id: string) => Promise<void>;
+  archiveInventoryItem: (id: string, reason?: string) => Promise<void>;
+  unarchiveInventoryItem: (id: string) => Promise<void>;
 
   // Shipments & Tracking
   addShipment: (data: {
@@ -668,6 +672,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       type: 'C',
       customText: customCode,
       useCustom: !!customCode,
+      includeRandomSuffix: false,
     });
     const pin = Math.floor(1000 + Math.random() * 9000).toString();
 
@@ -732,6 +737,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       type: 'Q',
       customText: customCode,
       useCustom: !!customCode,
+      includeRandomSuffix: false,
     });
 
     const quote: Quotation = {
@@ -823,6 +829,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       type: 'I',
       customText: customCode,
       useCustom: !!customCode,
+      includeRandomSuffix: false,
     });
 
     const invoice: Invoice = {
@@ -974,18 +981,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     brand: string;
     serialNo: string;
     sellingPrice: number;
+    stockId?: string;
   }): Promise<string> => {
-    const salt = Math.random().toString(36).substring(2, 6).toUpperCase();
-    const newSku = `SKU-${Date.now().toString().slice(-6)}-${salt}`;
+    // Deterministic short sequence number
+    const count = inventory.length + 1;
+    const cleanSeq = String(count).padStart(2, '0');
+    const newSku = `SKU-${Date.now().toString().slice(-6)}-${cleanSeq}`;
+
+    // Format dedicated Stock ID: eg {sr no}-{id}
+    const cleanSerial = (data.serialNo || '').trim();
+    const stockId = data.stockId?.trim() || (cleanSerial ? `${cleanSerial}-${cleanSeq}` : `STK-${(data.modelNo || 'AC').replace(/[^a-zA-Z0-9]/g, '').slice(0, 6).toUpperCase()}-${cleanSeq}`);
+
     const item: InventoryItem = {
       id: newSku,
+      stockId,
       name: data.name,
       modelNo: data.modelNo,
       type: data.type,
       brand: data.brand,
-      serialNo: data.serialNo,
+      serialNo: data.serialNo, // Physical manufacturer barcode / serial number is strictly preserved
+      barcode: data.serialNo,
       status: 'AVAILABLE',
       sellingPrice: data.sellingPrice,
+      isArchived: false,
       createdAt: new Date().toISOString(),
     };
 
@@ -1003,6 +1021,34 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       await updateDoc(doc(db, 'inventory', id), {
         status: 'SOLD',
         assignedInvoiceId: invoiceId || '',
+        updatedAt: new Date().toISOString(),
+      });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, `inventory/${id}`);
+    }
+  };
+
+  const archiveInventoryItem = async (id: string, reason?: string) => {
+    try {
+      await updateDoc(doc(db, 'inventory', id), {
+        status: 'ARCHIVED',
+        isArchived: true,
+        archivedAt: new Date().toISOString(),
+        archivedReason: reason || 'Product left the store (Delivered & Installed)',
+        updatedAt: new Date().toISOString(),
+      });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, `inventory/${id}`);
+    }
+  };
+
+  const unarchiveInventoryItem = async (id: string) => {
+    try {
+      await updateDoc(doc(db, 'inventory', id), {
+        status: 'AVAILABLE',
+        isArchived: false,
+        archivedAt: deleteField(),
+        archivedReason: deleteField(),
         updatedAt: new Date().toISOString(),
       });
     } catch (err) {
@@ -1053,6 +1099,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       type: 'D',
       customText: customCode,
       useCustom: !!customCode,
+      includeRandomSuffix: false,
     });
 
     const initialUpdate: TrackingUpdate = {
@@ -1173,6 +1220,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       if (storeContactPhone !== undefined) updates.storeContactPhone = storeContactPhone;
 
       await updateDoc(doc(db, 'shipments', shipmentId), updates);
+
+      // Once product leaves the store and is delivered & installed, automatically archive it from active stock
+      if (status === 'DELIVERED_INSTALLED') {
+        const invoiceIdsToMatch = [target?.invoiceId, ...(target?.invoiceIds || [])].filter(Boolean) as string[];
+        const itemsToArchive = inventory.filter((item) => {
+          if (item.isArchived || item.status === 'ARCHIVED') return false;
+          if (item.assignedInvoiceId && invoiceIdsToMatch.includes(item.assignedInvoiceId)) return true;
+          if (target?.itemsSummary && item.serialNo && target.itemsSummary.toLowerCase().includes(item.serialNo.toLowerCase())) return true;
+          return false;
+        });
+
+        for (const itm of itemsToArchive) {
+          try {
+            await updateDoc(doc(db, 'inventory', itm.id), {
+              status: 'ARCHIVED',
+              isArchived: true,
+              archivedAt: new Date().toISOString(),
+              archivedReason: `Delivered & Installed via Shipment #${shipmentId}`,
+              updatedAt: new Date().toISOString(),
+            });
+          } catch (e) {
+            console.warn('Could not archive item on delivered & installed:', e);
+          }
+        }
+      }
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, `shipments/${shipmentId}`);
     }
@@ -1386,6 +1458,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         updateInventoryItem,
         markInventorySold,
         deleteInventoryItem,
+        archiveInventoryItem,
+        unarchiveInventoryItem,
         addShipment,
         addShipmentTrackingUpdate,
         updateShipmentStatus,

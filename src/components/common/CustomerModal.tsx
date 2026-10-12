@@ -1,7 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { UserPlus, Edit2, X, Check, Phone, MapPin, Lock, User } from 'lucide-react';
+import { UserPlus, Edit2, X, Check, Phone, MapPin, Lock, User, Scissors } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { Customer } from '../../types';
+import { stripRandomSuffix } from '../../utils/idGenerator';
 
 interface CustomerModalProps {
   isOpen: boolean;
@@ -300,17 +301,33 @@ export const CustomerModal: React.FC<CustomerModalProps> = ({
             </div>
 
             {!isEdit ? (
-              <div>
-                <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
-                  Custom ID Code (Middle):
-                </label>
+              <div className="space-y-1">
+                <div className="flex items-center justify-between">
+                  <label className="block font-bold text-slate-700 dark:text-slate-300">
+                    Custom ID Code:
+                  </label>
+                  {customIdText && (
+                    <button
+                      type="button"
+                      onClick={() => setCustomIdText(stripRandomSuffix(customIdText))}
+                      className="text-[10px] font-bold text-red-600 dark:text-red-400 hover:underline flex items-center gap-0.5"
+                      title="Remove 4 random digits from the end of ID"
+                    >
+                      <Scissors className="w-3 h-3" />
+                      Remove 4 Digits
+                    </button>
+                  )}
+                </div>
                 <input
                   type="text"
                   value={customIdText}
                   onChange={(e) => setCustomIdText(e.target.value.toUpperCase())}
-                  placeholder="Optional code"
+                  placeholder="e.g. SHARMA or CUST-101"
                   className="w-full font-mono uppercase px-3 py-2 border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white rounded-xl focus:ring-2 focus:ring-red-500 outline-none"
                 />
+                <p className="text-[10px] text-slate-400">
+                  Clean ID (no random 4-digit code at the end)
+                </p>
               </div>
             ) : (
               <div>

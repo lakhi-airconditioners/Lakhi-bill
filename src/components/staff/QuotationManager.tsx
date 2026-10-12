@@ -16,6 +16,7 @@ import {
   Calendar,
   UserPlus,
   Sparkles,
+  Scissors,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { Quotation, QuotationItem, Invoice, PdfProviderType, Customer } from '../../types';
@@ -23,6 +24,7 @@ import { generateQuotationPdf } from '../../utils/pdfGenerator';
 import { resolvePdfLinks } from '../../utils/cloudPdfHelper';
 import { PdfPreviewModal } from '../common/PdfPreviewModal';
 import { CloudPdfLinkSelector } from '../common/CloudPdfLinkSelector';
+import { stripRandomSuffix } from '../../utils/idGenerator';
 import { CustomerModal } from '../common/CustomerModal';
 import { CustomerSelectBox } from '../common/CustomerSelectBox';
 import { AiQuotationBuilderModal } from './AiQuotationBuilderModal';
@@ -909,16 +911,32 @@ export const QuotationManager: React.FC<QuotationManagerProps> = ({ onConvertToI
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
 
                 <div>
-                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 mb-1">
-                    Optional Custom ID Middle Text:
-                  </label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-xs font-bold text-slate-700 dark:text-slate-300">
+                      Optional Custom Quote ID:
+                    </label>
+                    {formCustomIdText && (
+                      <button
+                        type="button"
+                        onClick={() => setFormCustomIdText(stripRandomSuffix(formCustomIdText))}
+                        className="text-[10px] font-bold text-red-600 dark:text-red-400 hover:underline flex items-center gap-0.5"
+                        title="Remove 4 random digits from the end of ID"
+                      >
+                        <Scissors className="w-3 h-3" />
+                        Remove 4 Digits
+                      </button>
+                    )}
+                  </div>
                   <input
                     type="text"
                     value={formCustomIdText}
                     onChange={(e) => setFormCustomIdText(e.target.value.toUpperCase())}
-                    placeholder="e.g. PROJECT-A"
+                    placeholder="e.g. PROJECT-A or QT-01"
                     className="w-full text-xs font-mono uppercase px-3.5 py-2.5 border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white rounded-xl focus:ring-2 focus:ring-red-500 outline-none"
                   />
+                  <p className="text-[10px] text-slate-400 mt-1">
+                    Clean ID (no random 4-digit code at the end)
+                  </p>
                 </div>
 
                 <div className="col-span-full">

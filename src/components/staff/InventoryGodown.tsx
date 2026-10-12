@@ -16,11 +16,15 @@ import {
   Sparkles,
   Layers,
   Zap,
+  Scissors,
+  Archive,
+  ArchiveRestore,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
-import { InventoryItem } from '../../types';
+import { InventoryItem, StockStatus } from '../../types';
 import { InventoryQrScannerModal } from './InventoryQrScannerModal';
 import { ProductQrLabelModal } from './ProductQrLabelModal';
+import { stripRandomSuffix } from '../../utils/idGenerator';
 
 interface InventoryGodownProps {
   onBillItem?: (item: InventoryItem) => void;
@@ -35,13 +39,15 @@ export const InventoryGodown: React.FC<InventoryGodownProps> = ({ onBillItem }) 
     updateInventoryItem,
     markInventorySold,
     deleteInventoryItem,
+    archiveInventoryItem,
+    unarchiveInventoryItem,
     updateShipmentStatus,
     addShipmentTrackingUpdate,
   } = useApp();
 
   const [search, setSearch] = useState('');
   const [filterType, setFilterType] = useState('ALL');
-  const [filterStatus, setFilterStatus] = useState<'ALL' | 'AVAILABLE' | 'SOLD'>('AVAILABLE');
+  const [filterStatus, setFilterStatus] = useState<'ALL' | 'AVAILABLE' | 'SOLD' | 'ARCHIVED'>('AVAILABLE');
   const [isAddOpen, setIsAddOpen] = useState(false);
 
   // Form State for Adding In-Store Stock (with multi-unit & batch support)
@@ -50,6 +56,7 @@ export const InventoryGodown: React.FC<InventoryGodownProps> = ({ onBillItem }) 
   const [formType, setFormType] = useState('AC');
   const [formBrand, setFormBrand] = useState('');
   const [formSerialNo, setFormSerialNo] = useState('');
+  const [formStockId, setFormStockId] = useState('');
   const [formPrice, setFormPrice] = useState<number | ''>('');
   const [formQuantity, setFormQuantity] = useState<number>(1);
   const [formSerialNumbers, setFormSerialNumbers] = useState<string[]>(['']);
@@ -73,8 +80,9 @@ export const InventoryGodown: React.FC<InventoryGodownProps> = ({ onBillItem }) 
   const [editType, setEditType] = useState('AC');
   const [editBrand, setEditBrand] = useState('');
   const [editSerialNo, setEditSerialNo] = useState('');
+  const [editStockId, setEditStockId] = useState('');
   const [editPrice, setEditPrice] = useState<number | ''>('');
-  const [editStatus, setEditStatus] = useState<'AVAILABLE' | 'SOLD'>('AVAILABLE');
+  const [editStatus, setEditStatus] = useState<StockStatus>('AVAILABLE');
   const [isUpdating, setIsUpdating] = useState(false);
 
   // QR Scanner Modal State & Product Label Modal State
@@ -194,6 +202,7 @@ export const InventoryGodown: React.FC<InventoryGodownProps> = ({ onBillItem }) 
     setEditType(item.type);
     setEditBrand(item.brand);
     setEditSerialNo(item.serialNo);
+    setEditStockId(item.stockId || '');
     setEditPrice(item.sellingPrice);
     setEditStatus(item.status);
   };
@@ -209,6 +218,7 @@ export const InventoryGodown: React.FC<InventoryGodownProps> = ({ onBillItem }) 
         type: editType.trim(),
         brand: editBrand.trim(),
         serialNo: editSerialNo.trim(),
+        stockId: editStockId.trim() || undefined,
         sellingPrice: Number(editPrice) || 0,
         status: editStatus,
       });
@@ -286,6 +296,13 @@ export const InventoryGodown: React.FC<InventoryGodownProps> = ({ onBillItem }) 
           serial = `${(formBrand || 'LAK').slice(0, 3).toUpperCase()}-${(formModelNo || 'AC').replace(/[^a-zA-Z0-9]/g, '').slice(0, 5)}-${Date.now().toString().slice(-4)}${(i + 1).toString().padStart(2, '0')}`;
         }
 
+        const unitStockId =
+          qty === 1 && formStockId.trim()
+            ? formStockId.trim()
+            : formStockId.trim()
+            ? `${formStockId.trim()}-${(i + 1).toString().padStart(2, '0')}`
+            : undefined;
+
         await addInventoryItem({
           name: formName.trim(),
           modelNo: formModelNo.trim(),
@@ -293,6 +310,7 @@ export const InventoryGodown: React.FC<InventoryGodownProps> = ({ onBillItem }) 
           brand: formBrand.trim(),
           serialNo: serial,
           sellingPrice: Number(formPrice) || 0,
+          stockId: unitStockId,
         });
       }
 
@@ -301,6 +319,7 @@ export const InventoryGodown: React.FC<InventoryGodownProps> = ({ onBillItem }) 
       setFormName('');
       setFormModelNo('');
       setFormSerialNo('');
+      setFormStockId('');
       setFormQuantity(1);
       setFormSerialNumbers(['']);
 
@@ -311,19 +330,34 @@ export const InventoryGodown: React.FC<InventoryGodownProps> = ({ onBillItem }) 
     }
   };
 
-  const availableCount = inventory.filter((i) => i.status === 'AVAILABLE').length;
-  const soldCount = inventory.filter((i) => i.status === 'SOLD').length;
+  const availableCount = inventory.filter((i) => !i.isArchived && i.status === 'AVAILABLE').length;
+  const soldCount = inventory.filter((i) => !i.isArchived && i.status === 'SOLD').length;
+  const archivedCount = inventory.filter((i) => i.isArchived || i.status === 'ARCHIVED').length;
 
   const filteredItems = inventory.filter((item) => {
+    const isItemArchived = !!item.isArchived || item.status === 'ARCHIVED';
+
+    // If filtering specifically for ARCHIVED
+    if (filterStatus === 'ARCHIVED') {
+      if (!isItemArchived) return false;
+    } else if (filterStatus === 'ALL') {
+      // "ALL Active": items currently in store or logged (excluding archived items that left store)
+      if (isItemArchived) return false;
+    } else {
+      // AVAILABLE or SOLD active items only
+      if (isItemArchived) return false;
+      if (item.status !== filterStatus) return false;
+    }
+
     const matchesSearch =
       item.name.toLowerCase().includes(search.toLowerCase()) ||
       item.modelNo.toLowerCase().includes(search.toLowerCase()) ||
       item.brand.toLowerCase().includes(search.toLowerCase()) ||
-      item.serialNo.toLowerCase().includes(search.toLowerCase());
+      item.serialNo.toLowerCase().includes(search.toLowerCase()) ||
+      (item.stockId && item.stockId.toLowerCase().includes(search.toLowerCase()));
 
     const matchesType = filterType === 'ALL' || item.type.toUpperCase() === filterType.toUpperCase();
-    const matchesStatus = filterStatus === 'ALL' || item.status === filterStatus;
-    return matchesSearch && matchesType && matchesStatus;
+    return matchesSearch && matchesType;
   });
 
   return (
@@ -376,7 +410,7 @@ export const InventoryGodown: React.FC<InventoryGodownProps> = ({ onBillItem }) 
       </div>
 
       {/* Metric Badges */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <div className="p-4 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xs">
           <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider block">
             Available In Store
@@ -395,7 +429,16 @@ export const InventoryGodown: React.FC<InventoryGodownProps> = ({ onBillItem }) 
           </div>
         </div>
 
-        <div className="p-4 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xs col-span-2 sm:col-span-1">
+        <div className="p-4 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xs">
+          <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider block">
+            Archived (Left Store)
+          </span>
+          <div className="text-2xl font-black text-amber-600 dark:text-amber-400 mt-1">
+            {archivedCount}
+          </div>
+        </div>
+
+        <div className="p-4 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xs">
           <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider block">
             Total Logged
           </span>
@@ -413,24 +456,26 @@ export const InventoryGodown: React.FC<InventoryGodownProps> = ({ onBillItem }) 
             type="text"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search name, model, serial..."
+            placeholder="Search name, model, serial, stock ID..."
             className="w-full text-xs pl-10 pr-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white focus:ring-2 focus:ring-red-500 outline-none"
           />
         </div>
 
         <div className="flex flex-wrap items-center gap-2 w-full md:w-auto">
           {/* Status filter */}
-          {(['ALL', 'AVAILABLE', 'SOLD'] as const).map((st) => (
+          {(['ALL', 'AVAILABLE', 'SOLD', 'ARCHIVED'] as const).map((st) => (
             <button
               key={st}
               onClick={() => setFilterStatus(st)}
               className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
                 filterStatus === st
-                  ? 'bg-red-600 text-white shadow-xs'
+                  ? st === 'ARCHIVED'
+                    ? 'bg-amber-600 text-white shadow-xs'
+                    : 'bg-red-600 text-white shadow-xs'
                   : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700'
               }`}
             >
-              {st}
+              {st === 'ARCHIVED' ? '📦 Archived (Left Store)' : st === 'ALL' ? 'All Active' : st}
             </button>
           ))}
         </div>
@@ -442,11 +487,11 @@ export const InventoryGodown: React.FC<InventoryGodownProps> = ({ onBillItem }) 
           <table className="w-full text-left border-collapse text-xs">
             <thead>
               <tr className="bg-slate-50 dark:bg-slate-950/60 border-b border-slate-100 dark:border-slate-800 text-slate-500 dark:text-slate-400 uppercase tracking-wider text-[10px]">
-                <th className="px-4 py-3">SKU / ID</th>
+                <th className="px-4 py-3">Stock ID</th>
                 <th className="px-4 py-3">Type</th>
                 <th className="px-4 py-3">Product Name & Model</th>
                 <th className="px-4 py-3">Brand</th>
-                <th className="px-4 py-3">Serial No</th>
+                <th className="px-4 py-3">Carton Barcode / Serial</th>
                 <th className="px-4 py-3">Selling Price</th>
                 <th className="px-4 py-3">Status</th>
                 <th className="px-4 py-3 text-right">Actions</th>
@@ -460,10 +505,15 @@ export const InventoryGodown: React.FC<InventoryGodownProps> = ({ onBillItem }) 
                   </td>
                 </tr>
               ) : (
-                filteredItems.map((item) => (
+                filteredItems.map((item, idx) => (
                   <tr key={item.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/40 transition-colors">
-                    <td className="px-4 py-3 font-mono font-bold text-slate-800 dark:text-slate-200">
-                      {item.id}
+                    <td className="px-4 py-3 font-mono">
+                      <div className="font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
+                        <span className="px-2 py-0.5 rounded-md bg-red-100 dark:bg-red-950/60 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-900/40 text-[11px] font-black">
+                          {item.stockId || `${item.serialNo || item.id}-${idx + 1}`}
+                        </span>
+                      </div>
+                      <div className="text-[10px] text-slate-400 mt-0.5 font-mono">SKU: {item.id}</div>
                     </td>
                     <td className="px-4 py-3">
                       <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
@@ -479,9 +529,9 @@ export const InventoryGodown: React.FC<InventoryGodownProps> = ({ onBillItem }) 
                     </td>
                     <td className="px-4 py-3 font-mono text-[11px] text-slate-700 dark:text-slate-300">
                       {item.serialNo ? (
-                        <span className="flex items-center gap-1">
-                          <Barcode className="w-3.5 h-3.5 text-slate-400" />
-                          {item.serialNo}
+                        <span className="flex items-center gap-1 font-bold text-slate-800 dark:text-slate-200">
+                          <Barcode className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                          <span>{item.serialNo}</span>
                         </span>
                       ) : (
                         <span className="text-slate-400 italic">None</span>
@@ -493,22 +543,29 @@ export const InventoryGodown: React.FC<InventoryGodownProps> = ({ onBillItem }) 
                     <td className="px-4 py-3">
                       <span
                         className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
-                          item.status === 'AVAILABLE'
+                          item.isArchived || item.status === 'ARCHIVED'
+                            ? 'bg-amber-100 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-900/40'
+                            : item.status === 'AVAILABLE'
                             ? 'bg-emerald-100 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300'
                             : 'bg-slate-100 dark:bg-slate-800 text-slate-500'
                         }`}
                       >
-                        {item.status}
+                        {item.isArchived || item.status === 'ARCHIVED' ? 'ARCHIVED' : item.status}
                       </span>
                       {item.assignedInvoiceId && (
                         <div className="text-[10px] text-slate-400 font-mono mt-0.5">
                           Inv: {item.assignedInvoiceId}
                         </div>
                       )}
+                      {(item.isArchived || item.status === 'ARCHIVED') && item.archivedReason && (
+                        <div className="text-[9px] text-amber-600 dark:text-amber-400 italic mt-0.5 max-w-[120px] truncate" title={item.archivedReason}>
+                          {item.archivedReason}
+                        </div>
+                      )}
                     </td>
                     <td className="px-4 py-3 text-right">
                       <div className="flex items-center justify-end gap-1.5">
-                        {item.status === 'AVAILABLE' && (
+                        {item.status === 'AVAILABLE' && !item.isArchived && (
                           <>
                             {onBillItem && (
                               <button
@@ -550,6 +607,27 @@ export const InventoryGodown: React.FC<InventoryGodownProps> = ({ onBillItem }) 
                         >
                           <Edit2 className="w-3.5 h-3.5" />
                         </button>
+                        {item.isArchived || item.status === 'ARCHIVED' ? (
+                          <button
+                            onClick={() => unarchiveInventoryItem(item.id)}
+                            className="p-1.5 text-amber-600 hover:text-emerald-600 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                            title="Restore unit back to In-Store Available Stock"
+                          >
+                            <ArchiveRestore className="w-4 h-4" />
+                          </button>
+                        ) : (
+                          <button
+                            onClick={() => {
+                              if (confirm(`Archive stock item ${item.name} (${item.serialNo})? It has left the store.`)) {
+                                archiveInventoryItem(item.id, 'Manually marked as left the store / installed');
+                              }
+                            }}
+                            className="p-1.5 text-slate-400 hover:text-amber-600 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                            title="Archive Item (Left Store & Installed)"
+                          >
+                            <Archive className="w-4 h-4" />
+                          </button>
+                        )}
                         <button
                           onClick={() => {
                             if (confirm(`Delete stock item ${item.name}?`)) {
@@ -746,6 +824,45 @@ export const InventoryGodown: React.FC<InventoryGodownProps> = ({ onBillItem }) 
                     ))}
                   </div>
                 </div>
+              </div>
+
+              {/* Stock ID Configuration for Website (e.g. {sr no}-{id}) */}
+              <div className="p-3 bg-red-50/60 dark:bg-red-950/30 rounded-2xl border border-red-100 dark:border-red-900/40 space-y-2">
+                <div className="flex items-center justify-between">
+                  <div>
+                    <label className="block font-bold text-slate-800 dark:text-slate-200 text-xs">
+                      Website Stock ID:
+                    </label>
+                    <span className="text-[10px] text-slate-500 dark:text-slate-400">
+                      Unique identifier for store stock (e.g. &#123;sr no&#125;-&#123;id&#125; or STK-01)
+                    </span>
+                  </div>
+                  {formStockId && (
+                    <button
+                      type="button"
+                      onClick={() => setFormStockId(stripRandomSuffix(formStockId))}
+                      className="text-[10px] font-bold text-red-600 dark:text-red-400 hover:underline flex items-center gap-0.5"
+                      title="Remove trailing random 4-digit codes from Stock ID"
+                    >
+                      <Scissors className="w-3 h-3" />
+                      Remove 4 Digits
+                    </button>
+                  )}
+                </div>
+                <input
+                  type="text"
+                  value={formStockId}
+                  onChange={(e) => setFormStockId(e.target.value.toUpperCase())}
+                  placeholder={
+                    formSerialNo
+                      ? `Auto: ${formSerialNo}-01 (or type custom stock ID)`
+                      : 'Auto: {sr no}-{id} or custom stock ID'
+                  }
+                  className="w-full font-mono text-xs uppercase px-3 py-2 border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white rounded-xl focus:ring-2 focus:ring-red-500 outline-none"
+                />
+                <p className="text-[10px] text-slate-500 dark:text-slate-400">
+                  Preserves carton barcode unchanged while identifying each unit in stock.
+                </p>
               </div>
 
               {/* Serial Number Handling Section */}
@@ -1167,6 +1284,36 @@ export const InventoryGodown: React.FC<InventoryGodownProps> = ({ onBillItem }) 
                 </div>
               </div>
 
+              {/* Website Stock ID */}
+              <div className="p-3 bg-red-50/60 dark:bg-red-950/30 rounded-2xl border border-red-100 dark:border-red-900/40 space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <label className="block font-bold text-slate-800 dark:text-slate-200 text-xs">
+                    Website Stock ID:
+                  </label>
+                  {editStockId && (
+                    <button
+                      type="button"
+                      onClick={() => setEditStockId(stripRandomSuffix(editStockId))}
+                      className="text-[10px] font-bold text-red-600 dark:text-red-400 hover:underline flex items-center gap-0.5"
+                      title="Remove 4-digit random number from Stock ID"
+                    >
+                      <Scissors className="w-3 h-3" />
+                      Remove 4 Digits
+                    </button>
+                  )}
+                </div>
+                <input
+                  type="text"
+                  value={editStockId}
+                  onChange={(e) => setEditStockId(e.target.value.toUpperCase())}
+                  placeholder="e.g. DKN-FTKF50-01"
+                  className="w-full font-mono text-xs uppercase px-3 py-2 border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white rounded-xl focus:ring-2 focus:ring-red-500 outline-none"
+                />
+                <p className="text-[10px] text-slate-500">
+                  Differentiates this unit in store while carton barcode stays intact.
+                </p>
+              </div>
+
               <div>
                 <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
                   Inventory Status:
@@ -1178,6 +1325,7 @@ export const InventoryGodown: React.FC<InventoryGodownProps> = ({ onBillItem }) 
                 >
                   <option value="AVAILABLE">AVAILABLE (In Store Godown)</option>
                   <option value="SOLD">SOLD / INVOICED</option>
+                  <option value="ARCHIVED">ARCHIVED (Product Left Store & Installed)</option>
                 </select>
               </div>
 

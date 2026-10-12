@@ -130,18 +130,23 @@ export interface Invoice {
 }
 
 // Store Stock ONLY stores stock in store (nothing else - no godown, no shipping stock)
-export type StockStatus = 'AVAILABLE' | 'SOLD';
+export type StockStatus = 'AVAILABLE' | 'SOLD' | 'ARCHIVED';
 
 export interface InventoryItem {
-  id: string; // e.g. SKU or serial
+  id: string; // Internal document ID / SKU
+  stockId?: string; // Website unique Stock ID for this unit in store (e.g. {sr no}-{id})
   name: string; // Product name
   modelNo: string; // Model number
   type: string; // AC, TV, Refrigerator, Washing Machine, etc.
   brand: string;
-  serialNo: string;
-  status: StockStatus; // AVAILABLE or SOLD
+  serialNo: string; // Physical carton barcode / serial number (preserved without modification)
+  barcode?: string; // Barcode value
+  status: StockStatus; // AVAILABLE, SOLD, or ARCHIVED
   sellingPrice: number;
   assignedInvoiceId?: string;
+  isArchived?: boolean; // Set to true when product leaves store and is delivered & installed
+  archivedAt?: string;
+  archivedReason?: string;
   createdAt: string;
   updatedAt?: string;
 }

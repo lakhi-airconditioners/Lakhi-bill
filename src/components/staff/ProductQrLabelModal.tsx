@@ -14,6 +14,7 @@ export const ProductQrLabelModal: React.FC<ProductQrLabelModalProps> = ({ item, 
 
   // Structured payload for label QR
   const qrPayload = JSON.stringify({
+    stockId: item.stockId || `${item.serialNo || item.id}-01`,
     name: item.name,
     modelNo: item.modelNo,
     brand: item.brand,
@@ -81,19 +82,25 @@ export const ProductQrLabelModal: React.FC<ProductQrLabelModalProps> = ({ item, 
             </div>
 
             {/* Product Meta */}
-            <div className="w-full text-left space-y-1 text-xs">
+            <div className="w-full text-left space-y-1.5 text-xs">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-black px-2 py-0.5 rounded-md bg-red-100 text-red-800 font-mono">
+                  Stock ID: {item.stockId || `${item.serialNo || item.id}-01`}
+                </span>
+                <span className="text-emerald-700 font-black text-xs">
+                  ₹{item.sellingPrice.toLocaleString('en-IN')}
+                </span>
+              </div>
               <div className="font-black text-slate-900 leading-tight text-sm">{item.name}</div>
               <div className="flex items-center justify-between text-[11px] text-slate-600">
                 <span>Model: <strong className="font-mono text-slate-900">{item.modelNo}</strong></span>
                 <span>Brand: <strong className="text-slate-900">{item.brand}</strong></span>
               </div>
-              <div className="flex items-center justify-between text-[11px] text-slate-600">
-                <span className="flex items-center gap-1 font-mono">
+              <div className="flex items-center justify-between text-[11px] text-slate-600 pt-1 border-t border-slate-100">
+                <span className="text-[10px] text-slate-500">Carton Barcode:</span>
+                <span className="flex items-center gap-1 font-mono font-bold text-slate-800">
                   <Barcode className="w-3.5 h-3.5" />
                   {item.serialNo || item.id}
-                </span>
-                <span className="text-emerald-700 font-black text-xs">
-                  ₹{item.sellingPrice.toLocaleString('en-IN')}
                 </span>
               </div>
             </div>

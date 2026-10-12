@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
-import { X, Sparkles, CheckCircle2, Copy, RefreshCw } from 'lucide-react';
+import { X, Sparkles, CheckCircle2, Copy, RefreshCw, Scissors } from 'lucide-react';
 import { IdTypePrefix } from '../../types';
-import { generateUniqueId, getYYYYMMDD } from '../../utils/idGenerator';
+import { generateUniqueId, getYYYYMMDD, stripRandomSuffix } from '../../utils/idGenerator';
 
 interface IdGeneratorModalProps {
   isOpen: boolean;
@@ -12,6 +12,7 @@ export const IdGeneratorModal: React.FC<IdGeneratorModalProps> = ({ isOpen, onCl
   const [selectedType, setSelectedType] = useState<IdTypePrefix>('I');
   const [useCustom, setUseCustom] = useState(false);
   const [customText, setCustomText] = useState('PROJECT-A');
+  const [includeRandomSuffix, setIncludeRandomSuffix] = useState(false); // Default false as requested
   const [generatedId, setGeneratedId] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
   const [copied, setCopied] = useState(false);
@@ -19,11 +20,11 @@ export const IdGeneratorModal: React.FC<IdGeneratorModalProps> = ({ isOpen, onCl
   if (!isOpen) return null;
 
   const typeDescriptions: Record<IdTypePrefix, { title: string; example: string }> = {
-    I: { title: 'Invoice ID', example: 'I202610099927 or I-PROJECT-A-9927' },
-    Q: { title: 'Quotation ID', example: 'Q202610094182' },
-    T: { title: 'Transaction / Ledger Inflow-Outflow', example: 'T202610098383' },
-    D: { title: 'Delivery / Shipment Tracking', example: 'D202610097103' },
-    C: { title: 'Customer ID', example: 'C202610094102' },
+    I: { title: 'Invoice ID', example: 'I20261012 or INV-PROJECT-A' },
+    Q: { title: 'Quotation ID', example: 'Q20261012 or QT-CLIENT-01' },
+    T: { title: 'Transaction / Ledger Inflow-Outflow', example: 'T20261012' },
+    D: { title: 'Delivery / Shipment Tracking', example: 'D20261012 or DEL-01' },
+    C: { title: 'Customer ID', example: 'C20261012 or CUST-SHARMA' },
   };
 
   const handleGenerate = async () => {
@@ -33,11 +34,17 @@ export const IdGeneratorModal: React.FC<IdGeneratorModalProps> = ({ isOpen, onCl
         type: selectedType,
         customText,
         useCustom,
+        includeRandomSuffix,
       });
       setGeneratedId(id);
     } finally {
       setIsGenerating(false);
     }
+  };
+
+  const handleRemoveRandomDigits = () => {
+    if (!generatedId) return;
+    setGeneratedId(stripRandomSuffix(generatedId));
   };
 
   const handleCopy = () => {
@@ -151,6 +158,22 @@ export const IdGeneratorModal: React.FC<IdGeneratorModalProps> = ({ isOpen, onCl
                 />
               </div>
             )}
+
+            {/* Option to Include / Remove 4-Digit Random Suffix */}
+            <div className="pt-2 border-t border-slate-100 dark:border-slate-800">
+              <label className="flex items-center gap-2 cursor-pointer text-xs font-bold text-slate-700 dark:text-slate-300">
+                <input
+                  type="checkbox"
+                  checked={includeRandomSuffix}
+                  onChange={(e) => setIncludeRandomSuffix(e.target.checked)}
+                  className="rounded text-red-600 focus:ring-red-500 w-4 h-4"
+                />
+                <span>Attach random 4-digit suffix at end (e.g. -4819)</span>
+              </label>
+              <p className="text-[11px] text-slate-400 pl-6 mt-0.5">
+                Unchecked by default for clean, professional IDs (e.g. CUST-1001, INV-20261012).
+              </p>
+            </div>
           </div>
 
           {/* Generator Action Button */}
@@ -165,22 +188,37 @@ export const IdGeneratorModal: React.FC<IdGeneratorModalProps> = ({ isOpen, onCl
 
           {/* Generated Result Output */}
           {generatedId && (
-            <div className="p-4 bg-emerald-50 dark:bg-emerald-950/30 rounded-2xl border border-emerald-200 dark:border-emerald-800/50 flex items-center justify-between">
-              <div>
-                <span className="text-[10px] font-bold text-emerald-800 dark:text-emerald-400 uppercase tracking-wider block">
-                  Generated & Verified Unique:
-                </span>
-                <span className="font-mono text-lg font-black text-emerald-900 dark:text-emerald-200">
-                  {generatedId}
-                </span>
+            <div className="p-4 bg-emerald-50 dark:bg-emerald-950/30 rounded-2xl border border-emerald-200 dark:border-emerald-800/50 space-y-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <span className="text-[10px] font-bold text-emerald-800 dark:text-emerald-400 uppercase tracking-wider block">
+                    Generated & Verified Unique:
+                  </span>
+                  <span className="font-mono text-lg font-black text-emerald-900 dark:text-emerald-200">
+                    {generatedId}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  {/[0-9]{4}$/.test(generatedId) && (
+                    <button
+                      type="button"
+                      onClick={handleRemoveRandomDigits}
+                      className="flex items-center gap-1 px-2.5 py-1.5 bg-slate-200 dark:bg-slate-800 hover:bg-slate-300 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 rounded-xl text-[11px] font-bold transition-colors"
+                      title="Remove the 4-digit random number from the end"
+                    >
+                      <Scissors className="w-3.5 h-3.5" />
+                      <span>Remove 4 Digits</span>
+                    </button>
+                  )}
+                  <button
+                    onClick={handleCopy}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold shadow-xs transition-colors"
+                  >
+                    {copied ? <CheckCircle2 className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                    {copied ? 'Copied' : 'Copy'}
+                  </button>
+                </div>
               </div>
-              <button
-                onClick={handleCopy}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold shadow-xs transition-colors"
-              >
-                {copied ? <CheckCircle2 className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-                {copied ? 'Copied' : 'Copy'}
-              </button>
             </div>
           )}
         </div>
