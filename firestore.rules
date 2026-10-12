@@ -1,0 +1,110 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Default-deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        request.auth.token.email == 'mitanshrs@gmail.com' ||
+        request.auth.uid == 'XyBNT51qYKWy5f1ewjSBs3DyIwo2' ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid)) ||
+        (exists(/databases/$(database)/documents/system/admins) &&
+         request.auth.uid in get(/databases/$(database)/documents/system/admins).data.adminUids)
+      );
+    }
+
+    // System Config / Admins list
+    match /system/{configId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /admins/{adminUid} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Customers Collection
+    match /customers/{customerId} {
+      allow read: if true;
+      allow write: if isValidId(customerId) && (
+        isAdmin() ||
+        (isSignedIn() && incoming().diff(existing()).affectedKeys().hasOnly(['linkedUid', 'email', 'accessPin', 'updatedAt'])) ||
+        incoming().diff(existing()).affectedKeys().hasOnly(['accessPin', 'updatedAt'])
+      );
+    }
+
+    // User Accounts Collection (Per-User linked customer profiles stored in Firebase)
+    match /user_accounts/{uid} {
+      allow read, write: if isSignedIn() && (request.auth.uid == uid || isAdmin());
+    }
+
+    // Quotations Collection
+    match /quotations/{quotationId} {
+      allow read: if true;
+      allow write: if isValidId(quotationId) && isAdmin();
+    }
+
+    // Invoices Collection
+    match /invoices/{invoiceId} {
+      allow read: if true;
+      allow write: if isValidId(invoiceId) && isAdmin();
+    }
+
+    // Store Stock Inventory (Stock in Store Only)
+    match /inventory/{itemId} {
+      allow read: if true;
+      allow write: if isValidId(itemId) && isAdmin();
+    }
+
+    // Shipments & Tracking
+    match /shipments/{shipmentId} {
+      allow read: if true;
+      allow write: if isValidId(shipmentId) && isAdmin();
+    }
+
+    // Transactions / Payments
+    match /transactions/{transactionId} {
+      allow read: if true;
+      allow write: if isValidId(transactionId) && isAdmin();
+    }
+
+    // 72-Hour Claims
+    match /claims/{claimId} {
+      allow read: if true;
+      allow create: if isValidId(claimId) &&
+        incoming().status == 'PENDING' &&
+        incoming().id is string &&
+        incoming().customerName is string &&
+        incoming().customerPhone is string;
+      allow update, delete: if isValidId(claimId) && isAdmin();
+    }
+
+    // Payables (Who we have to pay - Vendors, suppliers, refunds)
+    match /payables/{payableId} {
+      allow read: if true;
+      allow write: if isValidId(payableId) && isAdmin();
+    }
+  }
+}

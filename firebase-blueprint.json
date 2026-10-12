@@ -1,0 +1,207 @@
+{
+  "entities": {
+    "Customer": {
+      "title": "Customer",
+      "description": "Customer record with dual names, account balance pool, and direct access credentials",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Customer ID starting with C" },
+        "internalName": { "type": "string", "description": "Private staff notes/dealer alias" },
+        "externalName": { "type": "string", "description": "Legal customer name displayed on bills and portal" },
+        "phone": { "type": "string", "description": "Contact phone number" },
+        "email": { "type": "string", "description": "Optional email address" },
+        "address": { "type": "string", "description": "Billing / installation address" },
+        "accessPin": { "type": "string", "description": "Temporary or direct access PIN" },
+        "accountBalance": { "type": "number", "description": "Balance pool (+ positive advance, - negative owed)" },
+        "linkedUid": { "type": "string", "description": "Linked Firebase Auth UID" },
+        "createdAt": { "type": "string", "description": "Creation timestamp" },
+        "updatedAt": { "type": "string", "description": "Last update timestamp" }
+      },
+      "required": ["id", "internalName", "externalName", "phone", "accountBalance", "createdAt"]
+    },
+    "Quotation": {
+      "title": "Quotation",
+      "description": "Quotation record with room size, tonnage specs, pricing, and invoice linkage",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Quotation ID starting with Q" },
+        "customerId": { "type": "string", "description": "Target customer ID" },
+        "customerExternalName": { "type": "string", "description": "Customer name" },
+        "customerPhone": { "type": "string", "description": "Customer phone" },
+        "roomSizeSqFt": { "type": "number", "description": "Room size in square feet" },
+        "recommendedTonnage": { "type": "number", "description": "AC tonnage recommended" },
+        "brand": { "type": "string", "description": "AC brand" },
+        "model": { "type": "string", "description": "Model series/number" },
+        "acType": { "type": "string", "description": "AC type" },
+        "specsNotes": { "type": "string", "description": "Technical specs, heat load notes" },
+        "estimatedPrice": { "type": "number", "description": "Base price" },
+        "taxPercent": { "type": "number", "description": "Applicable tax percent" },
+        "totalAmount": { "type": "number", "description": "Total estimate with tax" },
+        "status": { "type": "string", "enum": ["DRAFT", "SENT", "ACCEPTED", "REJECTED", "CONVERTED"], "description": "Quote status" },
+        "linkedInvoiceIds": { "type": "array", "description": "Linked invoice IDs" },
+        "isArchived": { "type": "boolean", "description": "Archive state flag" },
+        "archivedPayload": { "type": "string", "description": "JSON payload backup" },
+        "createdAt": { "type": "string", "description": "Creation timestamp" },
+        "updatedAt": { "type": "string", "description": "Update timestamp" }
+      },
+      "required": ["id", "customerId", "totalAmount", "status", "createdAt"]
+    },
+    "Invoice": {
+      "title": "Invoice",
+      "description": "Invoice with line items, indoor/outdoor serials, split payments, and quote/tracking links",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Invoice ID starting with I" },
+        "customerId": { "type": "string", "description": "Customer ID" },
+        "customerExternalName": { "type": "string", "description": "External customer name" },
+        "customerPhone": { "type": "string", "description": "Phone number" },
+        "linkedQuoteIds": { "type": "array", "description": "Referenced quote IDs" },
+        "linkedTrackingIds": { "type": "array", "description": "Referenced shipment tracking IDs" },
+        "items": { "type": "array", "description": "Line items with indoor/outdoor serial numbers" },
+        "subtotal": { "type": "number", "description": "Subtotal before tax & discount" },
+        "taxAmount": { "type": "number", "description": "Calculated tax" },
+        "discountAmount": { "type": "number", "description": "Discount applied" },
+        "totalAmount": { "type": "number", "description": "Grand total bill amount" },
+        "prepaidSplits": { "type": "object", "description": "Split breakdown across balance, UPI, Card, Cheque, Cash" },
+        "totalPrepaid": { "type": "number", "description": "Total amount paid upfront" },
+        "amountDue": { "type": "number", "description": "Remaining balance to pay" },
+        "paymentStatus": { "type": "string", "enum": ["PAID", "PARTIAL", "UNPAID"], "description": "Payment status" },
+        "isArchived": { "type": "boolean", "description": "Whether document has been archived" },
+        "archivedPayload": { "type": "string", "description": "Full JSON payload backup if archived" },
+        "createdAt": { "type": "string", "description": "Creation timestamp" },
+        "updatedAt": { "type": "string", "description": "Update timestamp" }
+      },
+      "required": ["id", "customerId", "totalAmount", "totalPrepaid", "amountDue", "paymentStatus", "createdAt"]
+    },
+    "InventoryItem": {
+      "title": "InventoryItem",
+      "description": "AC unit in godown or brand warehouse with indoor & outdoor serial numbers",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Inventory SKU/Stock ID" },
+        "brand": { "type": "string", "description": "Brand name" },
+        "model": { "type": "string", "description": "Model description" },
+        "tonnage": { "type": "number", "description": "Capacity tonnage" },
+        "indoorUnitSerial": { "type": "string", "description": "Indoor unit barcode/serial" },
+        "outdoorUnitSerial": { "type": "string", "description": "Outdoor unit barcode/serial" },
+        "location": { "type": "string", "enum": ["STORE_GODOWN", "BRAND_WAREHOUSE"], "description": "Stock location" },
+        "sourcingStatus": { "type": "string", "enum": ["IN_STORE_GODOWN", "ORDER_PLACED_TO_BRAND", "SHIPPING_TO_STORE", "ARRIVED_AT_STORE", "ASSIGNED", "DISPATCHED"], "description": "Sourcing lifecycle" },
+        "brandOrderRef": { "type": "string", "description": "Purchase order ref from brand" },
+        "purchaseCost": { "type": "number", "description": "Wholesale procurement cost" },
+        "sellingPrice": { "type": "number", "description": "Retail price" },
+        "assignedInvoiceId": { "type": "string", "description": "Assigned invoice ID" },
+        "assignedCustomerId": { "type": "string", "description": "Assigned customer ID" },
+        "createdAt": { "type": "string", "description": "Creation timestamp" },
+        "updatedAt": { "type": "string", "description": "Update timestamp" }
+      },
+      "required": ["id", "brand", "model", "tonnage", "location", "sourcingStatus", "createdAt"]
+    },
+    "Shipment": {
+      "title": "Shipment",
+      "description": "Shipment tracking record with route, driver details, and delivery milestones",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Delivery tracking ID starting with D" },
+        "invoiceId": { "type": "string", "description": "Associated invoice ID" },
+        "customerId": { "type": "string", "description": "Customer ID" },
+        "customerExternalName": { "type": "string", "description": "Customer name" },
+        "deliveryAddress": { "type": "string", "description": "Installation/dropoff address" },
+        "itemsSummary": { "type": "string", "description": "Units and serial summary" },
+        "status": { "type": "string", "enum": ["ORDER_PLACED", "SHIPPING_TO_STORE", "ARRIVED_AT_STORE", "OUT_FOR_DELIVERY", "DELIVERED_INSTALLED"], "description": "Shipment status" },
+        "outForDeliveryEnabled": { "type": "boolean", "description": "Whether dispatch has active driver" },
+        "driverName": { "type": "string", "description": "Delivery driver name" },
+        "driverPhone": { "type": "string", "description": "Delivery driver phone number" },
+        "liveRouteLink": { "type": "string", "description": "Live GPS route or map link" },
+        "routeSimulationStep": { "type": "number", "description": "Current coordinate step in route" },
+        "isArchived": { "type": "boolean", "description": "Archived status" },
+        "archivedPayload": { "type": "string", "description": "Payload backup JSON" },
+        "createdAt": { "type": "string", "description": "Creation timestamp" },
+        "updatedAt": { "type": "string", "description": "Update timestamp" }
+      },
+      "required": ["id", "invoiceId", "customerId", "status", "createdAt"]
+    },
+    "Transaction": {
+      "title": "Transaction",
+      "description": "Store inflow/outflow ledger record with payment mode and bill/balance allocation",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Transaction ID starting with T" },
+        "customerId": { "type": "string", "description": "Customer ID" },
+        "invoiceId": { "type": "string", "description": "Optional linked invoice ID" },
+        "type": { "type": "string", "enum": ["INFLOW", "OUTFLOW"], "description": "Cash inflow or refund outflow" },
+        "mode": { "type": "string", "enum": ["UPI", "CARD", "CHEQUE_NEFT", "CASH", "BALANCE_ADJUSTMENT"], "description": "Payment mode" },
+        "referenceNo": { "type": "string", "description": "UTR, Auth ID, or Cheque slip" },
+        "bankOrDrawer": { "type": "string", "description": "Receiving Bank or Cash Drawer name" },
+        "amount": { "type": "number", "description": "Amount transferred" },
+        "treatment": { "type": "string", "enum": ["LINKED_TO_INVOICE", "ADDED_TO_BALANCE"], "description": "How the payment affects balances" },
+        "notes": { "type": "string", "description": "Staff notes" },
+        "createdAt": { "type": "string", "description": "Creation timestamp" }
+      },
+      "required": ["id", "customerId", "type", "mode", "amount", "treatment", "createdAt"]
+    },
+    "Claim": {
+      "title": "Claim",
+      "description": "72-hour temporary customer verification claim record",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "6-digit verification code" },
+        "customerName": { "type": "string", "description": "Customer requested name" },
+        "customerPhone": { "type": "string", "description": "Customer phone number" },
+        "customerNotes": { "type": "string", "description": "Additional verification details" },
+        "status": { "type": "string", "enum": ["PENDING", "APPROVED", "REJECTED", "EXPIRED"], "description": "Claim approval status" },
+        "matchedCustomerId": { "type": "string", "description": "Linked Customer ID once approved" },
+        "createdAt": { "type": "string", "description": "Creation timestamp" },
+        "expiresAt": { "type": "string", "description": "Strict 72-hour expiry timestamp" },
+        "approvedAt": { "type": "string", "description": "Approval timestamp" },
+        "approvedBy": { "type": "string", "description": "Staff email that approved" }
+      },
+      "required": ["id", "customerName", "customerPhone", "status", "createdAt", "expiresAt"]
+    },
+    "UserAccount": {
+      "title": "UserAccount",
+      "description": "User profile tied to Firebase Auth UID storing linked customer IDs for safe quick sign in",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "Firebase Auth user UID" },
+        "email": { "type": "string", "description": "User email" },
+        "linkedCustomerIds": { "type": "array", "items": { "type": "string" }, "description": "Customer IDs linked to this user" },
+        "updatedAt": { "type": "string", "description": "Last update timestamp" }
+      },
+      "required": ["uid", "linkedCustomerIds", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/customers/{customerId}": {
+      "schema": { "$ref": "#/entities/Customer" },
+      "description": "Store customers directory"
+    },
+    "/quotations/{quotationId}": {
+      "schema": { "$ref": "#/entities/Quotation" },
+      "description": "AC inquiries and quotes"
+    },
+    "/invoices/{invoiceId}": {
+      "schema": { "$ref": "#/entities/Invoice" },
+      "description": "Invoices with split payments and unit serials"
+    },
+    "/inventory/{itemId}": {
+      "schema": { "$ref": "#/entities/InventoryItem" },
+      "description": "Godown and warehouse AC stock"
+    },
+    "/shipments/{shipmentId}": {
+      "schema": { "$ref": "#/entities/Shipment" },
+      "description": "Shipment tracking and route details"
+    },
+    "/transactions/{transactionId}": {
+      "schema": { "$ref": "#/entities/Transaction" },
+      "description": "Store inflow and outflow ledger records"
+    },
+    "/claims/{claimId}": {
+      "schema": { "$ref": "#/entities/Claim" },
+      "description": "72-hour customer claim requests"
+    },
+    "/user_accounts/{uid}": {
+      "schema": { "$ref": "#/entities/UserAccount" },
+      "description": "User linked accounts for safe quick sign-in"
+    }
+  }
+}

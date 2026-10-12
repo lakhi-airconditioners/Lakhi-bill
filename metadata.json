@@ -1,0 +1,6 @@
+{
+  "name": "FrostFlow - AC Stock, Shipment, Tracking & Billing",
+  "description": "Comprehensive AC inventory, godown sourcing, shipment tracking, multi-quote split-billing, and customer portal system.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

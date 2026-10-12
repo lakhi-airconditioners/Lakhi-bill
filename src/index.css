@@ -1,0 +1,56 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* Lakhi Airconditioners Red Selection & Smooth Transitions */
+::selection {
+  background-color: #E01E26;
+  color: #FFFFFF;
+}
+
+::-moz-selection {
+  background-color: #E01E26;
+  color: #FFFFFF;
+}
+
+/* Custom Red Scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 9999px;
+}
+
+.dark ::-webkit-scrollbar-thumb {
+  background: #334155;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #E01E26;
+}
+
+.dark ::-webkit-scrollbar-thumb:hover {
+  background: #ef4444;
+}
+
+html {
+  color-scheme: light dark;
+}
+
+/* Touch & horizontal scrollbar hiding helper */
+.scrollbar-none::-webkit-scrollbar,
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.scrollbar-none,
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}

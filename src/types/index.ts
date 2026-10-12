@@ -1,0 +1,253 @@
+export type IdTypePrefix = 'I' | 'Q' | 'T' | 'D' | 'C';
+
+export interface Customer {
+  id: string; // e.g., C202610094102
+  internalName: string; // Staff dealer notes / alias (e.g. "Sharma Ji Project Alpha - Wholesale")
+  externalName: string; // Official legal name shown on bills and portal
+  phone: string;
+  email?: string;
+  billingAddress: string; // Billing address(es)
+  installationAddress: string; // Installation address(es)
+  accessPin: string; // 4-digit PIN for quick customer portal access
+  accountBalance: number; // Positive (+) = Advance funds; Negative (-) = Credit owed
+  linkedUid?: string; // Firebase Auth UID if converted to permanent
+  createdAt: string;
+  updatedAt?: string;
+}
+
+// Quotation Status: strictly RECORDED or SENT (no DRAFT, no APPROVED/REJECTED)
+export type QuotationStatus = 'RECORDED' | 'SENT';
+
+export interface QuotationItem {
+  id: string;
+  name: string; // Product name e.g. "55-inch 4K Smart OLED TV", "1.5T 5-Star Split AC"
+  modelNo: string; // Model number e.g. "OLED55C3PSA"
+  type: string; // Type: AC, TV, Refrigerator, Washing Machine, Microwave, etc.
+  brand?: string;
+  quantity: number;
+  rate: number; // Base rate or inclusive rate
+  taxPercent: number; // e.g. 18% or 28%
+  isAmountWithTax: boolean; // Flag to enter/calculate amount with tax
+  lineTotal: number;
+}
+
+export type PdfProviderType = 'google_drive' | 'onedrive' | 'other' | 'none';
+
+export interface Quotation {
+  id: string; // e.g., Q202610094182
+  customerId: string;
+  customerExternalName: string;
+  customerPhone: string;
+  billingAddress: string;
+  installationAddress: string;
+  items: QuotationItem[];
+  subtotal: number;
+  taxAmount: number;
+  totalAmount: number;
+  status: QuotationStatus; // RECORDED or SENT only
+  pdfLink?: string; // Direct PDF view link (URL/cloud/drive link)
+  pdfProvider?: PdfProviderType;
+  pdfDriveId?: string;
+  pdfViewLink?: string;
+  pdfDownloadLink?: string;
+  gstNumber?: string;
+  notes?: string;
+  linkedInvoiceIds?: string[];
+  createdAt: string;
+  updatedAt?: string;
+}
+
+export interface InvoiceLineItem {
+  id: string;
+  name: string; // Product name
+  modelNo: string; // Model number
+  type: string; // Type: AC, TV, Refrigerator, etc.
+  brand?: string;
+  serialNo?: string; // Single device serial or comma-separated serials
+  indoorUnitSerial?: string; // Optional indoor SN if AC
+  outdoorUnitSerial?: string; // Optional outdoor SN if AC
+  quantity: number;
+  rate: number;
+  taxPercent: number;
+  isAmountWithTax: boolean; // Option to enter amount with tax
+  discount: number;
+  lineTotal: number;
+}
+
+export interface PrepaidSplits {
+  fromBalance: number;
+  upi: {
+    amount: number;
+    receivingBank: string;
+    utr: string;
+  };
+  card: {
+    amount: number;
+    receivingBank: string;
+    authId: string;
+  };
+  chequeOrNeft: {
+    amount: number;
+    chequeOrSlipOrUtr: string;
+    bank: string;
+  };
+  cash: {
+    amount: number;
+    drawerRegister: string;
+  };
+}
+
+export type PaymentStatus = 'PAID' | 'PARTIAL' | 'UNPAID';
+
+export interface Invoice {
+  id: string; // e.g., I202610099927
+  customerId: string;
+  customerExternalName: string;
+  customerPhone: string;
+  billingAddress: string;
+  installationAddress: string;
+  linkedQuoteId?: string; // Direct linked quote ID entry option
+  items: InvoiceLineItem[];
+  subtotal: number;
+  taxAmount: number;
+  discountAmount: number;
+  roundOffAmount?: number; // Round off adjustment (+/-)
+  totalAmount: number;
+  prepaidSplits: PrepaidSplits;
+  totalPrepaid: number;
+  amountDue: number; // totalAmount - totalPrepaid
+  paymentStatus: PaymentStatus;
+  pdfLink?: string; // Stored PDF view link
+  pdfProvider?: PdfProviderType;
+  pdfDriveId?: string;
+  pdfViewLink?: string;
+  pdfDownloadLink?: string;
+  gstNumber?: string;
+  notes?: string;
+  paymentTransId?: string; // Payment transaction ID / UTR / Reference
+  createdAt: string;
+  updatedAt?: string;
+}
+
+// Store Stock ONLY stores stock in store (nothing else - no godown, no shipping stock)
+export type StockStatus = 'AVAILABLE' | 'SOLD';
+
+export interface InventoryItem {
+  id: string; // e.g. SKU or serial
+  name: string; // Product name
+  modelNo: string; // Model number
+  type: string; // AC, TV, Refrigerator, Washing Machine, etc.
+  brand: string;
+  serialNo: string;
+  status: StockStatus; // AVAILABLE or SOLD
+  sellingPrice: number;
+  assignedInvoiceId?: string;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+export type ShipmentStatus =
+  | 'ORDER_PLACED'
+  | 'ORDER_CONFIRMED'
+  | 'IN_TRANSIT'
+  | 'ARRIVED_AT_STORE'
+  | 'OUT_FOR_DELIVERY'
+  | 'DELIVERED_INSTALLED';
+
+export interface TrackingUpdate {
+  id: string;
+  timestamp: string;
+  message: string;
+  location?: string;
+}
+
+export interface Shipment {
+  id: string; // e.g., D202610097103
+  invoiceId?: string; // Invoice link is OPTIONAL (single)
+  invoiceIds?: string[]; // Multiple invoices can be linked later!
+  customerId: string;
+  customerExternalName: string;
+  customerPhone: string;
+  billingAddress?: string;
+  deliveryAddress: string; // Delivery/installation address
+  installationAddress: string;
+  itemsSummary: string;
+  status: ShipmentStatus;
+  outForDeliveryEnabled: boolean;
+  driverName?: string;
+  driverPhone?: string;
+  storeContactPhone?: string; // Lakhi Store helpline / contact info
+  liveRouteLink?: string;
+  trackingUpdates: TrackingUpdate[]; // Updates that can be added
+  createdAt: string;
+  updatedAt?: string;
+}
+
+export type TransactionType = 'INFLOW' | 'OUTFLOW';
+export type PaymentMode = 'UPI' | 'CARD' | 'CHEQUE_NEFT' | 'CASH' | 'BALANCE_ADJUSTMENT';
+export type PaymentTreatment = 'LINKED_TO_INVOICE' | 'ADDED_TO_BALANCE';
+
+export interface TransactionRecord {
+  id: string; // e.g., T202610098383
+  customerId: string;
+  invoiceId?: string;
+  type: TransactionType;
+  mode: PaymentMode;
+  referenceNo?: string;
+  bankOrDrawer: string;
+  amount: number;
+  treatment: PaymentTreatment;
+  notes?: string;
+  createdAt: string;
+}
+
+export type ClaimStatus = 'PENDING' | 'APPROVED' | 'REJECTED' | 'EXPIRED';
+
+export interface VerificationClaim {
+  id: string; // 6-digit code e.g., 948210
+  customerName: string;
+  customerPhone: string;
+  customerNotes?: string;
+  status: ClaimStatus;
+  matchedCustomerId?: string;
+  createdAt: string;
+  expiresAt: string; // strict 72-hour lifetime
+  approvedAt?: string;
+  approvedBy?: string;
+}
+
+export type PayableStatus = 'PENDING' | 'PAID' | 'CANCELLED';
+
+export interface PayableRecord {
+  id: string; // e.g. PAY-202610091234
+  vendorName: string; // Who we have to pay (Supplier, technician, refund, etc.)
+  vendorPhone?: string;
+  category: 'SUPPLIER_STOCK' | 'FREIGHT_DELIVERY' | 'LABOR_INSTALLATION' | 'CUSTOMER_REFUND' | 'UTILITY_RENT' | 'OTHER';
+  amount: number;
+  dueDate?: string;
+  notes?: string;
+  billReference?: string;
+  status: PayableStatus;
+  paidAt?: string;
+  paymentMode?: PaymentMode;
+  paymentReference?: string;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+export interface AdminConfig {
+  adminUids: string[];
+  gstNumber?: string;
+  businessName?: string;
+  businessTagline?: string;
+  businessPhone?: string;
+  updatedAt?: string;
+  updatedBy?: string;
+}
+
+export interface UserAccount {
+  uid: string;
+  email: string;
+  linkedCustomerIds: string[]; // customer IDs linked to this firebase account for quick sign in
+  updatedAt: string;
+}
