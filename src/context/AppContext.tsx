@@ -668,11 +668,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Customer Management
   const addCustomer = async (data: Partial<Customer>, customCode?: string): Promise<string> => {
+    const isCustom = !!(customCode && customCode.trim());
     const newId = await generateUniqueId({
       type: 'C',
       customText: customCode,
-      useCustom: !!customCode,
-      includeRandomSuffix: false,
+      useCustom: isCustom,
+      includeRandomSuffix: isCustom ? false : true,
     });
     const pin = Math.floor(1000 + Math.random() * 9000).toString();
 
@@ -733,11 +734,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     },
     customCode?: string
   ): Promise<string> => {
+    const isCustom = !!(customCode && customCode.trim());
     const newId = await generateUniqueId({
       type: 'Q',
       customText: customCode,
-      useCustom: !!customCode,
-      includeRandomSuffix: false,
+      useCustom: isCustom,
+      includeRandomSuffix: isCustom ? false : true,
     });
 
     const quote: Quotation = {
@@ -825,11 +827,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     },
     customCode?: string
   ): Promise<string> => {
+    const isCustom = !!(customCode && customCode.trim());
     const newId = await generateUniqueId({
       type: 'I',
       customText: customCode,
-      useCustom: !!customCode,
-      includeRandomSuffix: false,
+      useCustom: isCustom,
+      includeRandomSuffix: isCustom ? false : true,
     });
 
     const invoice: Invoice = {

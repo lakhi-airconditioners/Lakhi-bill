@@ -17,6 +17,8 @@ import {
   UserPlus,
   Sparkles,
   Scissors,
+  Tag,
+  Hash,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { Quotation, QuotationItem, Invoice, PdfProviderType, Customer } from '../../types';
@@ -24,7 +26,7 @@ import { generateQuotationPdf } from '../../utils/pdfGenerator';
 import { resolvePdfLinks } from '../../utils/cloudPdfHelper';
 import { PdfPreviewModal } from '../common/PdfPreviewModal';
 import { CloudPdfLinkSelector } from '../common/CloudPdfLinkSelector';
-import { stripRandomSuffix } from '../../utils/idGenerator';
+import { stripRandomSuffix, buildCustomIdPreview, formatCustomIdValue } from '../../utils/idGenerator';
 import { CustomerModal } from '../common/CustomerModal';
 import { CustomerSelectBox } from '../common/CustomerSelectBox';
 import { AiQuotationBuilderModal } from './AiQuotationBuilderModal';
@@ -68,6 +70,8 @@ export const QuotationManager: React.FC<QuotationManagerProps> = ({ onConvertToI
   });
   const [formNotes, setFormNotes] = useState('');
   const [formCustomIdText, setFormCustomIdText] = useState('');
+  const [formIncludePrefixLetter, setFormIncludePrefixLetter] = useState(true);
+  const [formIncludeRandomDigits, setFormIncludeRandomDigits] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Add / Edit Customer Modal State from Select Customer
@@ -205,7 +209,14 @@ export const QuotationManager: React.FC<QuotationManagerProps> = ({ onConvertToI
           notes: formNotes,
           createdAt: formQuoteDate ? new Date(formQuoteDate).toISOString() : undefined,
         },
-        formCustomIdText || undefined
+        formCustomIdText.trim()
+          ? formatCustomIdValue({
+              type: 'Q',
+              customText: formCustomIdText,
+              includePrefixLetter: formIncludePrefixLetter,
+              includeRandomDigits: formIncludeRandomDigits,
+            })
+          : undefined
       );
 
       setIsCreateOpen(false);
@@ -217,6 +228,9 @@ export const QuotationManager: React.FC<QuotationManagerProps> = ({ onConvertToI
       setFormInstallationAddress('');
       setFormGstin(gstNumber || '');
       setFormPdfLink('');
+      setFormCustomIdText('');
+      setFormIncludePrefixLetter(true);
+      setFormIncludeRandomDigits(false);
       setFormPdfConfig({
         provider: 'google_drive',
         viewLink: '',
@@ -910,8 +924,8 @@ export const QuotationManager: React.FC<QuotationManagerProps> = ({ onConvertToI
               {/* ID & Notes */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
 
-                <div>
-                  <div className="flex items-center justify-between mb-1">
+                <div className="space-y-2 p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/80">
+                  <div className="flex items-center justify-between">
                     <label className="block text-xs font-bold text-slate-700 dark:text-slate-300">
                       Optional Custom Quote ID:
                     </label>
@@ -920,23 +934,79 @@ export const QuotationManager: React.FC<QuotationManagerProps> = ({ onConvertToI
                         type="button"
                         onClick={() => setFormCustomIdText(stripRandomSuffix(formCustomIdText))}
                         className="text-[10px] font-bold text-red-600 dark:text-red-400 hover:underline flex items-center gap-0.5"
-                        title="Remove 4 random digits from the end of ID"
+                        title="Remove trailing random 4 digits"
                       >
                         <Scissors className="w-3 h-3" />
                         Remove 4 Digits
                       </button>
                     )}
                   </div>
+
                   <input
                     type="text"
                     value={formCustomIdText}
                     onChange={(e) => setFormCustomIdText(e.target.value.toUpperCase())}
-                    placeholder="e.g. PROJECT-A or QT-01"
+                    placeholder="e.g. PROJECT-A or QT-01 (Leave blank for pre-made ID)"
                     className="w-full text-xs font-mono uppercase px-3.5 py-2.5 border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white rounded-xl focus:ring-2 focus:ring-red-500 outline-none"
                   />
-                  <p className="text-[10px] text-slate-400 mt-1">
-                    Clean ID (no random 4-digit code at the end)
-                  </p>
+
+                  {formCustomIdText.trim() ? (
+                    <div className="space-y-2 pt-1 border-t border-slate-200 dark:border-slate-700">
+                      {/* Toggles for ID letter and digits */}
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setFormIncludePrefixLetter(!formIncludePrefixLetter)}
+                          className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-colors ${
+                            formIncludePrefixLetter
+                              ? 'bg-red-600 text-white border-red-600 shadow-xs'
+                              : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-100'
+                          }`}
+                          title="Turn ID Letter prefix (Q-) On or Off"
+                        >
+                          <Tag className="w-3 h-3" />
+                          <span>ID Letter Prefix (Q-)</span>
+                          <span className="text-[10px] font-black uppercase ml-0.5">
+                            {formIncludePrefixLetter ? 'ON' : 'OFF'}
+                          </span>
+                        </button>
+
+                        <button
+                          type="button"
+                          onClick={() => setFormIncludeRandomDigits(!formIncludeRandomDigits)}
+                          className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-colors ${
+                            formIncludeRandomDigits
+                              ? 'bg-red-600 text-white border-red-600 shadow-xs'
+                              : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-100'
+                          }`}
+                          title="Turn 4-digit code On or Off"
+                        >
+                          <Hash className="w-3 h-3" />
+                          <span>Add 4 Digits</span>
+                          <span className="text-[10px] font-black uppercase ml-0.5">
+                            {formIncludeRandomDigits ? 'ON' : 'OFF'}
+                          </span>
+                        </button>
+                      </div>
+
+                      {/* Preview of resulting ID */}
+                      <div className="flex items-center justify-between text-xs px-2.5 py-1.5 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
+                        <span className="text-[10px] text-slate-500 dark:text-slate-400 font-medium">Resulting Quote ID:</span>
+                        <span className="font-mono font-bold text-red-600 dark:text-red-400 text-xs">
+                          {buildCustomIdPreview({
+                            type: 'Q',
+                            customText: formCustomIdText,
+                            includePrefixLetter: formIncludePrefixLetter,
+                            includeRandomDigits: formIncludeRandomDigits,
+                          })}
+                        </span>
+                      </div>
+                    </div>
+                  ) : (
+                    <p className="text-[10px] text-slate-500 dark:text-slate-400">
+                      Pre-made Quote ID has ID letter &amp; digits ON. To customize, enter custom text above.
+                    </p>
+                  )}
                 </div>
 
                 <div className="col-span-full">

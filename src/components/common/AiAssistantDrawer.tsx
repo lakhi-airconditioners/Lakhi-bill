@@ -305,7 +305,7 @@ export const AiAssistantDrawer: React.FC<AiAssistantDrawerProps> = ({
         },
       };
     } else if (lower.includes('stock') || lower.includes('inventory')) {
-      const avail = inventory.filter((i) => i.status === 'AVAILABLE');
+      const avail = inventory.filter((i) => !i.isArchived && i.status !== 'ARCHIVED' && i.status === 'AVAILABLE');
       reply = `We currently have ${avail.length} items in available store stock across Daikin, Voltas, and other brands.`;
     } else if (lower.includes('shipment') || lower.includes('delivery')) {
       const pending = shipments.filter((s) => s.status !== 'DELIVERED_INSTALLED');

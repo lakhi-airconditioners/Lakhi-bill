@@ -6,7 +6,8 @@ export interface IdGeneratorOptions {
   type: IdTypePrefix;
   customText?: string;
   useCustom?: boolean;
-  includeRandomSuffix?: boolean; // If false (default for custom IDs), removes the 4-digit random code
+  includePrefixLetter?: boolean; // In custom ID: toggle ID letter prefix (C-, I-, Q-). Can only be toggled in custom ID.
+  includeRandomSuffix?: boolean; // In custom ID: toggle trailing 4 digits. In pre-made/standard: stays ON (true).
 }
 
 const COLLECTION_MAP: Record<IdTypePrefix, string> = {
@@ -40,7 +41,7 @@ export function stripRandomSuffix(id: string): string {
   if (clean.length >= 12 && /^[A-Z][0-9]{8}[0-9]{4}$/.test(clean)) {
     return clean.slice(0, -4);
   }
-  // General fallback: if length > 7 and ends in 4 digits preceded by non-digit or long string
+  // General fallback: if length > 8 and ends in 4 digits preceded by non-digit
   if (clean.length > 8 && /[0-9]{4}$/.test(clean)) {
     return clean.slice(0, -4);
   }
@@ -58,34 +59,122 @@ export function getYYYYMMDD(date: Date = new Date()): string {
 }
 
 /**
+ * Real-time preview helper for Custom ID vs Pre-made ID
+ */
+export function buildCustomIdPreview(options: {
+  type: IdTypePrefix;
+  customText: string;
+  includePrefixLetter: boolean;
+  includeRandomDigits: boolean;
+}): string {
+  if (!options.customText.trim()) {
+    // Standard Pre-made ID: ID letter and digits STAY ON
+    const datePart = getYYYYMMDD();
+    return `${options.type}${datePart}XXXX`;
+  }
+
+  let clean = options.customText.trim().toUpperCase().replace(/[^A-Z0-9_-]/g, '');
+
+  if (!options.includePrefixLetter) {
+    if (clean.startsWith(`${options.type}-`) || clean.startsWith(`${options.type}_`)) {
+      clean = clean.slice(2);
+    }
+  } else {
+    if (
+      !clean.startsWith(`${options.type}-`) &&
+      !clean.startsWith(`${options.type}_`) &&
+      !(clean.startsWith(options.type) && clean.length > 1 && /^[A-Z][0-9]/.test(clean))
+    ) {
+      clean = `${options.type}-${clean}`;
+    }
+  }
+
+  if (options.includeRandomDigits) {
+    return `${clean}-XXXX`;
+  }
+  return clean;
+}
+
+/**
+ * Format custom ID string with options applied
+ */
+export function formatCustomIdValue(options: {
+  type: IdTypePrefix;
+  customText: string;
+  includePrefixLetter: boolean;
+  includeRandomDigits: boolean;
+}): string {
+  let clean = options.customText.trim().toUpperCase().replace(/[^A-Z0-9_-]/g, '');
+
+  if (!options.includePrefixLetter) {
+    if (clean.startsWith(`${options.type}-`) || clean.startsWith(`${options.type}_`)) {
+      clean = clean.slice(2);
+    }
+  } else {
+    if (
+      !clean.startsWith(`${options.type}-`) &&
+      !clean.startsWith(`${options.type}_`) &&
+      !(clean.startsWith(options.type) && clean.length > 1 && /^[A-Z][0-9]/.test(clean))
+    ) {
+      clean = `${options.type}-${clean}`;
+    }
+  }
+
+  if (options.includeRandomDigits) {
+    const randomPart = generateRandomCode();
+    return `${clean}-${randomPart}`;
+  }
+  return clean;
+}
+
+/**
  * Generates an ID according to the formula:
- * Clean: [Type] + [Custom Text | YYYYMMDD] (no random 4-digit code)
- * Or with random suffix if explicitly requested.
+ * - Pre-made / Non-custom: ID letter and digits STAY ON (e.g. C202610144102)
+ * - Custom ID: ID letter and 4-digit code can be individually turned ON/OFF
  */
 export function generateRawId(options: IdGeneratorOptions): string {
-  const { type, customText, useCustom, includeRandomSuffix = false } = options;
+  const {
+    type,
+    customText,
+    useCustom,
+    includePrefixLetter = true,
+    includeRandomSuffix,
+  } = options;
 
-  if (useCustom && customText && customText.trim()) {
-    const cleanCustom = customText.trim().toUpperCase().replace(/[^A-Z0-9_-]/g, '');
-    if (!includeRandomSuffix) {
-      // Clean custom ID: If it already has prefix, use verbatim; else add prefix
-      if (cleanCustom.startsWith(type)) {
-        return cleanCustom;
-      }
-      return `${type}-${cleanCustom}`;
+  // 1. Pre-made automatic ID (when custom is not used): ID letter and digits stay ON!
+  if (!useCustom || !customText || !customText.trim()) {
+    const datePart = getYYYYMMDD();
+    // In pre-made, random 4-digit suffix always stays ON (unless explicitly disabled)
+    if (includeRandomSuffix !== false) {
+      const randomPart = generateRandomCode();
+      return `${type}${datePart}${randomPart}`;
     }
-    const randomPart = generateRandomCode();
-    return `${type}${cleanCustom}${randomPart}`;
+    return `${type}${datePart}`;
   }
 
-  const datePart = getYYYYMMDD();
+  // 2. Custom ID: user can toggle ID letter and 4-digit random code
+  let cleanCustom = customText.trim().toUpperCase().replace(/[^A-Z0-9_-]/g, '');
+
+  if (!includePrefixLetter) {
+    if (cleanCustom.startsWith(`${type}-`) || cleanCustom.startsWith(`${type}_`)) {
+      cleanCustom = cleanCustom.slice(2);
+    }
+  } else {
+    if (
+      !cleanCustom.startsWith(`${type}-`) &&
+      !cleanCustom.startsWith(`${type}_`) &&
+      !(cleanCustom.startsWith(type) && cleanCustom.length > 1 && /^[A-Z][0-9]/.test(cleanCustom))
+    ) {
+      cleanCustom = `${type}-${cleanCustom}`;
+    }
+  }
+
   if (includeRandomSuffix) {
     const randomPart = generateRandomCode();
-    return `${type}${datePart}${randomPart}`;
+    return `${cleanCustom}-${randomPart}`;
   }
 
-  // Clean date-based format without random 4-digits
-  return `${type}${datePart}`;
+  return cleanCustom;
 }
 
 /**
@@ -94,10 +183,12 @@ export function generateRawId(options: IdGeneratorOptions): string {
  */
 export async function generateUniqueId(options: IdGeneratorOptions): Promise<string> {
   const collectionName = COLLECTION_MAP[options.type];
+  const isPreMade = !options.useCustom || !options.customText || !options.customText.trim();
+  const hasRandom = isPreMade ? options.includeRandomSuffix !== false : !!options.includeRandomSuffix;
   const baseId = generateRawId(options);
 
-  // If random suffix is included, test up to 5 random candidates
-  if (options.includeRandomSuffix) {
+  // If random suffix is included (standard pre-made or custom with 4-digits enabled)
+  if (hasRandom) {
     for (let attempt = 0; attempt < 5; attempt++) {
       const candidateId = generateRawId(options);
       try {

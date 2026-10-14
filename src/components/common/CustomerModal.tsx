@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
-import { UserPlus, Edit2, X, Check, Phone, MapPin, Lock, User, Scissors } from 'lucide-react';
+import { UserPlus, Edit2, X, Check, Phone, MapPin, Lock, User, Scissors, Tag, Hash } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { Customer } from '../../types';
-import { stripRandomSuffix } from '../../utils/idGenerator';
+import { stripRandomSuffix, buildCustomIdPreview, formatCustomIdValue } from '../../utils/idGenerator';
 
 interface CustomerModalProps {
   isOpen: boolean;
@@ -34,6 +34,8 @@ export const CustomerModal: React.FC<CustomerModalProps> = ({
   const [installationAddress, setInstallationAddress] = useState('');
   const [accessPin, setAccessPin] = useState('');
   const [customIdText, setCustomIdText] = useState('');
+  const [includePrefixLetter, setIncludePrefixLetter] = useState(true);
+  const [includeRandomDigits, setIncludeRandomDigits] = useState(false);
   const [initialBalance, setInitialBalance] = useState<number>(0);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState('');
@@ -49,6 +51,8 @@ export const CustomerModal: React.FC<CustomerModalProps> = ({
       setAccessPin(customerToEdit.accessPin || '');
       setInitialBalance(customerToEdit.accountBalance || 0);
       setCustomIdText('');
+      setIncludePrefixLetter(true);
+      setIncludeRandomDigits(false);
     } else {
       let initName = '';
       let initPhone = '';
@@ -75,6 +79,8 @@ export const CustomerModal: React.FC<CustomerModalProps> = ({
       setAccessPin(Math.floor(1000 + Math.random() * 9000).toString());
       setInitialBalance(0);
       setCustomIdText(initId);
+      setIncludePrefixLetter(true);
+      setIncludeRandomDigits(false);
     }
     setError('');
   }, [customerToEdit, isOpen, initialQuery]);
@@ -119,6 +125,15 @@ export const CustomerModal: React.FC<CustomerModalProps> = ({
         onClose();
       } else {
         const pinToUse = accessPin.trim() || Math.floor(1000 + Math.random() * 9000).toString();
+        const customCodeToUse = customIdText.trim()
+          ? formatCustomIdValue({
+              type: 'C',
+              customText: customIdText,
+              includePrefixLetter,
+              includeRandomDigits,
+            })
+          : undefined;
+
         const newId = await addCustomer(
           {
             externalName: externalName.trim(),
@@ -130,7 +145,7 @@ export const CustomerModal: React.FC<CustomerModalProps> = ({
             accessPin: pinToUse,
             accountBalance: Number(initialBalance) || 0,
           },
-          customIdText.trim() || undefined
+          customCodeToUse
         );
 
         // Find or synthesize customer object to pass back to caller
@@ -301,33 +316,89 @@ export const CustomerModal: React.FC<CustomerModalProps> = ({
             </div>
 
             {!isEdit ? (
-              <div className="space-y-1">
+              <div className="space-y-2 p-3 rounded-2xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700/80">
                 <div className="flex items-center justify-between">
-                  <label className="block font-bold text-slate-700 dark:text-slate-300">
-                    Custom ID Code:
+                  <label className="block text-xs font-bold text-slate-700 dark:text-slate-300">
+                    Custom Customer ID:
                   </label>
                   {customIdText && (
                     <button
                       type="button"
                       onClick={() => setCustomIdText(stripRandomSuffix(customIdText))}
                       className="text-[10px] font-bold text-red-600 dark:text-red-400 hover:underline flex items-center gap-0.5"
-                      title="Remove 4 random digits from the end of ID"
+                      title="Remove trailing random 4 digits"
                     >
                       <Scissors className="w-3 h-3" />
                       Remove 4 Digits
                     </button>
                   )}
                 </div>
+
                 <input
                   type="text"
                   value={customIdText}
                   onChange={(e) => setCustomIdText(e.target.value.toUpperCase())}
-                  placeholder="e.g. SHARMA or CUST-101"
-                  className="w-full font-mono uppercase px-3 py-2 border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white rounded-xl focus:ring-2 focus:ring-red-500 outline-none"
+                  placeholder="e.g. SHARMA or CUST-101 (Leave blank for pre-made ID)"
+                  className="w-full text-xs font-mono uppercase px-3 py-2 border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white rounded-xl focus:ring-2 focus:ring-red-500 outline-none"
                 />
-                <p className="text-[10px] text-slate-400">
-                  Clean ID (no random 4-digit code at the end)
-                </p>
+
+                {customIdText.trim() ? (
+                  <div className="space-y-2 pt-1 border-t border-slate-200 dark:border-slate-700">
+                    {/* Toggles for ID letter and digits */}
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setIncludePrefixLetter(!includePrefixLetter)}
+                        className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-colors ${
+                          includePrefixLetter
+                            ? 'bg-red-600 text-white border-red-600 shadow-xs'
+                            : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-100'
+                        }`}
+                        title="Turn ID Letter prefix (C-) On or Off"
+                      >
+                        <Tag className="w-3 h-3" />
+                        <span>ID Letter Prefix (C-)</span>
+                        <span className="text-[10px] font-black uppercase ml-0.5">
+                          {includePrefixLetter ? 'ON' : 'OFF'}
+                        </span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setIncludeRandomDigits(!includeRandomDigits)}
+                        className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-colors ${
+                          includeRandomDigits
+                            ? 'bg-red-600 text-white border-red-600 shadow-xs'
+                            : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-100'
+                        }`}
+                        title="Turn 4-digit code On or Off"
+                      >
+                        <Hash className="w-3 h-3" />
+                        <span>Add 4 Digits</span>
+                        <span className="text-[10px] font-black uppercase ml-0.5">
+                          {includeRandomDigits ? 'ON' : 'OFF'}
+                        </span>
+                      </button>
+                    </div>
+
+                    {/* Preview of resulting ID */}
+                    <div className="flex items-center justify-between text-xs px-2.5 py-1.5 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
+                      <span className="text-[10px] text-slate-500 dark:text-slate-400 font-medium">Resulting Custom ID:</span>
+                      <span className="font-mono font-bold text-red-600 dark:text-red-400 text-xs">
+                        {buildCustomIdPreview({
+                          type: 'C',
+                          customText: customIdText,
+                          includePrefixLetter,
+                          includeRandomDigits,
+                        })}
+                      </span>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-[10px] text-slate-500 dark:text-slate-400">
+                    Pre-made ID has ID letter &amp; digits ON. To customize, enter custom text above.
+                  </p>
+                )}
               </div>
             ) : (
               <div>

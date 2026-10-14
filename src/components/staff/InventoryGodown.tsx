@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   Boxes,
   Plus,
@@ -19,12 +19,17 @@ import {
   Scissors,
   Archive,
   ArchiveRestore,
+  Hash,
+  ChevronDown,
+  ChevronRight,
+  LayoutGrid,
+  List,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { InventoryItem, StockStatus } from '../../types';
 import { InventoryQrScannerModal } from './InventoryQrScannerModal';
 import { ProductQrLabelModal } from './ProductQrLabelModal';
-import { stripRandomSuffix } from '../../utils/idGenerator';
+import { stripRandomSuffix, generateRandomCode } from '../../utils/idGenerator';
 
 interface InventoryGodownProps {
   onBillItem?: (item: InventoryItem) => void;
@@ -47,7 +52,9 @@ export const InventoryGodown: React.FC<InventoryGodownProps> = ({ onBillItem }) 
 
   const [search, setSearch] = useState('');
   const [filterType, setFilterType] = useState('ALL');
-  const [filterStatus, setFilterStatus] = useState<'ALL' | 'AVAILABLE' | 'SOLD' | 'ARCHIVED'>('AVAILABLE');
+  const [filterStatus, setFilterStatus] = useState<'ALL' | 'AVAILABLE' | 'SOLD' | 'ARCHIVED'>('ALL');
+  const [stockViewLayout, setStockViewLayout] = useState<'GROUPED' | 'LIST'>('GROUPED');
+  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
   const [isAddOpen, setIsAddOpen] = useState(false);
 
   // Form State for Adding In-Store Stock (with multi-unit & batch support)
@@ -57,6 +64,8 @@ export const InventoryGodown: React.FC<InventoryGodownProps> = ({ onBillItem }) 
   const [formBrand, setFormBrand] = useState('');
   const [formSerialNo, setFormSerialNo] = useState('');
   const [formStockId, setFormStockId] = useState('');
+  const [formStockIncludePrefix, setFormStockIncludePrefix] = useState(true);
+  const [formStockIncludeDigits, setFormStockIncludeDigits] = useState(false);
   const [formPrice, setFormPrice] = useState<number | ''>('');
   const [formQuantity, setFormQuantity] = useState<number>(1);
   const [formSerialNumbers, setFormSerialNumbers] = useState<string[]>(['']);
@@ -81,6 +90,8 @@ export const InventoryGodown: React.FC<InventoryGodownProps> = ({ onBillItem }) 
   const [editBrand, setEditBrand] = useState('');
   const [editSerialNo, setEditSerialNo] = useState('');
   const [editStockId, setEditStockId] = useState('');
+  const [editStockIncludePrefix, setEditStockIncludePrefix] = useState(true);
+  const [editStockIncludeDigits, setEditStockIncludeDigits] = useState(false);
   const [editPrice, setEditPrice] = useState<number | ''>('');
   const [editStatus, setEditStatus] = useState<StockStatus>('AVAILABLE');
   const [isUpdating, setIsUpdating] = useState(false);
@@ -203,6 +214,8 @@ export const InventoryGodown: React.FC<InventoryGodownProps> = ({ onBillItem }) 
     setEditBrand(item.brand);
     setEditSerialNo(item.serialNo);
     setEditStockId(item.stockId || '');
+    setEditStockIncludePrefix(true);
+    setEditStockIncludeDigits(false);
     setEditPrice(item.sellingPrice);
     setEditStatus(item.status);
   };
@@ -212,13 +225,27 @@ export const InventoryGodown: React.FC<InventoryGodownProps> = ({ onBillItem }) 
     if (!editingItem) return;
     setIsUpdating(true);
     try {
+      let finalEditStockId = editStockId.trim();
+      if (finalEditStockId) {
+        let clean = finalEditStockId.toUpperCase();
+        if (!editStockIncludePrefix && clean.startsWith('STK-')) {
+          clean = clean.slice(4);
+        } else if (editStockIncludePrefix && !clean.startsWith('STK-')) {
+          clean = `STK-${clean}`;
+        }
+        if (editStockIncludeDigits && !/[0-9]{4}$/.test(clean)) {
+          clean = `${clean}-${generateRandomCode()}`;
+        }
+        finalEditStockId = clean;
+      }
+
       await updateInventoryItem(editingItem.id, {
         name: editName.trim(),
         modelNo: editModelNo.trim(),
         type: editType.trim(),
         brand: editBrand.trim(),
         serialNo: editSerialNo.trim(),
-        stockId: editStockId.trim() || undefined,
+        stockId: finalEditStockId || undefined,
         sellingPrice: Number(editPrice) || 0,
         status: editStatus,
       });
@@ -296,12 +323,21 @@ export const InventoryGodown: React.FC<InventoryGodownProps> = ({ onBillItem }) 
           serial = `${(formBrand || 'LAK').slice(0, 3).toUpperCase()}-${(formModelNo || 'AC').replace(/[^a-zA-Z0-9]/g, '').slice(0, 5)}-${Date.now().toString().slice(-4)}${(i + 1).toString().padStart(2, '0')}`;
         }
 
-        const unitStockId =
-          qty === 1 && formStockId.trim()
-            ? formStockId.trim()
-            : formStockId.trim()
-            ? `${formStockId.trim()}-${(i + 1).toString().padStart(2, '0')}`
-            : undefined;
+        let unitStockId: string | undefined = undefined;
+        if (formStockId.trim()) {
+          let clean = formStockId.trim().toUpperCase();
+          if (!formStockIncludePrefix && clean.startsWith('STK-')) {
+            clean = clean.slice(4);
+          } else if (formStockIncludePrefix && !clean.startsWith('STK-')) {
+            clean = `STK-${clean}`;
+          }
+          if (formStockIncludeDigits) {
+            clean = `${clean}-${generateRandomCode()}`;
+          }
+          unitStockId = qty === 1
+            ? clean
+            : `${clean}-${(i + 1).toString().padStart(2, '0')}`;
+        }
 
         await addInventoryItem({
           name: formName.trim(),
@@ -320,6 +356,8 @@ export const InventoryGodown: React.FC<InventoryGodownProps> = ({ onBillItem }) 
       setFormModelNo('');
       setFormSerialNo('');
       setFormStockId('');
+      setFormStockIncludePrefix(true);
+      setFormStockIncludeDigits(false);
       setFormQuantity(1);
       setFormSerialNumbers(['']);
 
@@ -330,26 +368,29 @@ export const InventoryGodown: React.FC<InventoryGodownProps> = ({ onBillItem }) 
     }
   };
 
-  const availableCount = inventory.filter((i) => !i.isArchived && i.status === 'AVAILABLE').length;
-  const soldCount = inventory.filter((i) => !i.isArchived && i.status === 'SOLD').length;
-  const archivedCount = inventory.filter((i) => i.isArchived || i.status === 'ARCHIVED').length;
+  // Strict archive helper: an item is archived if isArchived is true or status is ARCHIVED
+  const isItemArchived = (item: InventoryItem) => Boolean(item.isArchived || item.status === 'ARCHIVED');
 
+  const availableCount = inventory.filter((i) => !isItemArchived(i) && i.status === 'AVAILABLE').length;
+  const soldCount = inventory.filter((i) => !isItemArchived(i) && i.status === 'SOLD').length;
+  const activeInStoreCount = inventory.filter((i) => !isItemArchived(i)).length;
+  const archivedCount = inventory.filter((i) => isItemArchived(i)).length;
+
+  // Strict filtering: Archived products ONLY show in the 'ARCHIVED' list, never in 'ALL' or other active lists
   const filteredItems = inventory.filter((item) => {
-    const isItemArchived = !!item.isArchived || item.status === 'ARCHIVED';
+    const archived = isItemArchived(item);
 
     // If filtering specifically for ARCHIVED
     if (filterStatus === 'ARCHIVED') {
-      if (!isItemArchived) return false;
-    } else if (filterStatus === 'ALL') {
-      // "ALL Active": items currently in store or logged (excluding archived items that left store)
-      if (isItemArchived) return false;
+      if (!archived) return false;
     } else {
-      // AVAILABLE or SOLD active items only
-      if (isItemArchived) return false;
-      if (item.status !== filterStatus) return false;
+      // In ALL, AVAILABLE, and SOLD: ARCHIVED PRODUCTS NEVER APPEAR
+      if (archived) return false;
+      if (filterStatus !== 'ALL' && item.status !== filterStatus) return false;
     }
 
     const matchesSearch =
+      !search.trim() ||
       item.name.toLowerCase().includes(search.toLowerCase()) ||
       item.modelNo.toLowerCase().includes(search.toLowerCase()) ||
       item.brand.toLowerCase().includes(search.toLowerCase()) ||
@@ -359,6 +400,104 @@ export const InventoryGodown: React.FC<InventoryGodownProps> = ({ onBillItem }) 
     const matchesType = filterType === 'ALL' || item.type.toUpperCase() === filterType.toUpperCase();
     return matchesSearch && matchesType;
   });
+
+  // Group products by Brand & Model Number
+  interface ProductGroup {
+    key: string;
+    brand: string;
+    modelNo: string;
+    name: string;
+    type: string;
+    sellingPrice: number;
+    items: InventoryItem[];
+    availableCount: number;
+    soldCount: number;
+    archivedCount: number;
+  }
+
+  const groupedProducts: ProductGroup[] = useMemo(() => {
+    const map = new Map<string, ProductGroup>();
+
+    for (const item of filteredItems) {
+      const brand = (item.brand || 'Other').trim();
+      const model = (item.modelNo || 'Standard').trim();
+      const key = `${brand.toUpperCase()}____${model.toUpperCase()}`;
+
+      if (!map.has(key)) {
+        map.set(key, {
+          key,
+          brand,
+          modelNo: model,
+          name: item.name,
+          type: item.type || 'AC',
+          sellingPrice: item.sellingPrice,
+          items: [],
+          availableCount: 0,
+          soldCount: 0,
+          archivedCount: 0,
+        });
+      }
+
+      const group = map.get(key)!;
+      group.items.push(item);
+      if (isItemArchived(item)) {
+        group.archivedCount++;
+      } else if (item.status === 'AVAILABLE') {
+        group.availableCount++;
+      } else if (item.status === 'SOLD') {
+        group.soldCount++;
+      }
+    }
+
+    return Array.from(map.values()).sort((a, b) => {
+      const bComp = a.brand.localeCompare(b.brand);
+      if (bComp !== 0) return bComp;
+      return a.modelNo.localeCompare(b.modelNo);
+    });
+  }, [filteredItems]);
+
+  // Unique product types present in inventory
+  const availableProductTypes = useMemo(() => {
+    const types = new Set<string>();
+    inventory.forEach((i) => {
+      if (i.type && i.type.trim()) types.add(i.type.trim().toUpperCase());
+    });
+    return Array.from(types).sort();
+  }, [inventory]);
+
+  // Collapse / Expand handlers for product groups
+  const toggleGroupCollapse = (key: string) => {
+    setCollapsedGroups((prev) => ({
+      ...prev,
+      [key]: !prev[key],
+    }));
+  };
+
+  const expandAllGroups = () => setCollapsedGroups({});
+  const collapseAllGroups = () => {
+    const all: Record<string, boolean> = {};
+    groupedProducts.forEach((g) => {
+      all[g.key] = true;
+    });
+    setCollapsedGroups(all);
+  };
+
+  // Quick Inward another unit for a specific product group
+  const handleQuickAddUnitForGroup = (group: ProductGroup) => {
+    setFormName(group.name);
+    setFormBrand(group.brand);
+    setFormModelNo(group.modelNo);
+    setFormType(group.type);
+    setFormPrice(group.sellingPrice);
+    setFormSerialNo('');
+    const cleanModel = group.modelNo.replace(/[^a-zA-Z0-9]/g, '').slice(0, 6).toUpperCase();
+    setFormStockId(`STK-${cleanModel || 'UNIT'}`);
+    setFormStockIncludePrefix(true);
+    setFormStockIncludeDigits(false);
+    setFormQuantity(1);
+    setFormSerialNumbers(['']);
+    setIsAddOpen(true);
+  };
 
   return (
     <div className="space-y-6">
@@ -409,245 +548,642 @@ export const InventoryGodown: React.FC<InventoryGodownProps> = ({ onBillItem }) 
         </div>
       </div>
 
-      {/* Metric Badges */}
+      {/* Metric Badges (Clickable to switch filter) */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <div className="p-4 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xs">
+        <button
+          type="button"
+          onClick={() => setFilterStatus('AVAILABLE')}
+          className={`p-4 rounded-2xl border text-left transition-all ${
+            filterStatus === 'AVAILABLE'
+              ? 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-400 dark:border-emerald-700 ring-2 ring-emerald-500/30'
+              : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:border-emerald-300 dark:hover:border-emerald-800'
+          } shadow-xs cursor-pointer`}
+        >
           <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider block">
             Available In Store
           </span>
           <div className="text-2xl font-black text-emerald-600 dark:text-emerald-400 mt-1">
             {availableCount}
           </div>
-        </div>
+          <span className="text-[10px] text-slate-400">Ready to bill / install</span>
+        </button>
 
-        <div className="p-4 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xs">
+        <button
+          type="button"
+          onClick={() => setFilterStatus('SOLD')}
+          className={`p-4 rounded-2xl border text-left transition-all ${
+            filterStatus === 'SOLD'
+              ? 'bg-slate-100 dark:bg-slate-800 border-slate-400 dark:border-slate-600 ring-2 ring-slate-500/30'
+              : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:border-slate-300'
+          } shadow-xs cursor-pointer`}
+        >
           <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider block">
             Sold / Invoiced
           </span>
           <div className="text-2xl font-black text-slate-700 dark:text-slate-300 mt-1">
             {soldCount}
           </div>
-        </div>
+          <span className="text-[10px] text-slate-400">Assigned to bill</span>
+        </button>
 
-        <div className="p-4 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xs">
+        <button
+          type="button"
+          onClick={() => setFilterStatus('ALL')}
+          className={`p-4 rounded-2xl border text-left transition-all ${
+            filterStatus === 'ALL'
+              ? 'bg-red-50 dark:bg-red-950/40 border-red-400 dark:border-red-700 ring-2 ring-red-500/30'
+              : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:border-red-300'
+          } shadow-xs cursor-pointer`}
+        >
           <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider block">
-            Archived (Left Store)
+            All Active Store Stock
+          </span>
+          <div className="text-2xl font-black text-red-600 dark:text-red-400 mt-1">
+            {activeInStoreCount}
+          </div>
+          <span className="text-[10px] text-slate-400">In-store active stock • Zero archived</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setFilterStatus('ARCHIVED')}
+          className={`p-4 rounded-2xl border text-left transition-all ${
+            filterStatus === 'ARCHIVED'
+              ? 'bg-amber-50 dark:bg-amber-950/40 border-amber-400 dark:border-amber-700 ring-2 ring-amber-500/30'
+              : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:border-amber-300 dark:hover:border-amber-800'
+          } shadow-xs cursor-pointer`}
+        >
+          <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider block">
+            📦 Archived Products
           </span>
           <div className="text-2xl font-black text-amber-600 dark:text-amber-400 mt-1">
             {archivedCount}
           </div>
+          <span className="text-[10px] text-slate-400">Customer site / left store</span>
+        </button>
+      </div>
+
+      {/* Filter, Search and View Layout Bar */}
+      <div className="bg-white dark:bg-slate-900 p-4 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-xs flex flex-col lg:flex-row gap-3 items-center justify-between">
+        {/* Search input & Type filter */}
+        <div className="flex items-center gap-2 w-full lg:w-auto flex-1">
+          <div className="relative flex-1 max-w-md">
+            <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search brand, model, serial, stock ID, name..."
+              className="w-full text-xs pl-10 pr-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white focus:ring-2 focus:ring-red-500 outline-none"
+            />
+          </div>
+
+          {availableProductTypes.length > 1 && (
+            <select
+              value={filterType}
+              onChange={(e) => setFilterType(e.target.value)}
+              className="text-xs px-3 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white font-bold outline-none cursor-pointer"
+            >
+              <option value="ALL">All Types</option>
+              {availableProductTypes.map((t) => (
+                <option key={t} value={t}>
+                  {t}
+                </option>
+              ))}
+            </select>
+          )}
         </div>
 
-        <div className="p-4 bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xs">
-          <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider block">
-            Total Logged
-          </span>
-          <div className="text-2xl font-black text-red-600 dark:text-red-400 mt-1">
-            {inventory.length}
+        {/* Status filter buttons & View Mode Toggle */}
+        <div className="flex flex-wrap items-center justify-between lg:justify-end gap-2 w-full lg:w-auto">
+          {/* Status filters */}
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <button
+              onClick={() => setFilterStatus('ALL')}
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                filterStatus === 'ALL'
+                  ? 'bg-red-600 text-white shadow-xs'
+                  : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700'
+              }`}
+            >
+              All Active ({activeInStoreCount})
+            </button>
+            <button
+              onClick={() => setFilterStatus('AVAILABLE')}
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                filterStatus === 'AVAILABLE'
+                  ? 'bg-emerald-600 text-white shadow-xs'
+                  : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700'
+              }`}
+            >
+              Available ({availableCount})
+            </button>
+            <button
+              onClick={() => setFilterStatus('SOLD')}
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                filterStatus === 'SOLD'
+                  ? 'bg-slate-700 text-white shadow-xs'
+                  : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700'
+              }`}
+            >
+              Sold ({soldCount})
+            </button>
+            <button
+              onClick={() => setFilterStatus('ARCHIVED')}
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                filterStatus === 'ARCHIVED'
+                  ? 'bg-amber-600 text-white shadow-xs'
+                  : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700'
+              }`}
+            >
+              📦 Archived ({archivedCount})
+            </button>
+          </div>
+
+          {/* View Mode: Grouped by Model & Brand vs Flat List */}
+          <div className="flex items-center bg-slate-100 dark:bg-slate-800 p-1 rounded-xl border border-slate-200 dark:border-slate-700">
+            <button
+              type="button"
+              onClick={() => setStockViewLayout('GROUPED')}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold transition-all ${
+                stockViewLayout === 'GROUPED'
+                  ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-xs'
+                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+              }`}
+              title="Group products by Model and Brand"
+            >
+              <LayoutGrid className="w-3.5 h-3.5 text-red-500" />
+              <span>Grouped</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setStockViewLayout('LIST')}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold transition-all ${
+                stockViewLayout === 'LIST'
+                  ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-xs'
+                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+              }`}
+              title="Show flat table of all physical stock units"
+            >
+              <List className="w-3.5 h-3.5 text-slate-500" />
+              <span>Flat List</span>
+            </button>
           </div>
         </div>
       </div>
 
-      {/* Filter and Search Bar */}
-      <div className="bg-white dark:bg-slate-900 p-4 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-xs flex flex-col md:flex-row gap-3 items-center justify-between">
-        <div className="relative w-full md:w-80">
-          <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-3" />
-          <input
-            type="text"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search name, model, serial, stock ID..."
-            className="w-full text-xs pl-10 pr-4 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white focus:ring-2 focus:ring-red-500 outline-none"
-          />
+      {/* Archived Products Notice Banner */}
+      {filterStatus === 'ARCHIVED' && (
+        <div className="p-3.5 bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800/60 rounded-2xl flex items-center justify-between gap-3 text-xs text-amber-800 dark:text-amber-200 font-medium">
+          <div className="flex items-center gap-2">
+            <Archive className="w-4 h-4 text-amber-600 dark:text-amber-400 shrink-0" />
+            <span>
+              <strong>📦 Archived Products View:</strong> Showing {filteredItems.length} unit(s) that have left the store and are installed at customer sites. These items are strictly kept in this list and do NOT appear in All Active stock or sales billing pickers.
+            </span>
+          </div>
         </div>
+      )}
 
-        <div className="flex flex-wrap items-center gap-2 w-full md:w-auto">
-          {/* Status filter */}
-          {(['ALL', 'AVAILABLE', 'SOLD', 'ARCHIVED'] as const).map((st) => (
-            <button
-              key={st}
-              onClick={() => setFilterStatus(st)}
-              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
-                filterStatus === st
-                  ? st === 'ARCHIVED'
-                    ? 'bg-amber-600 text-white shadow-xs'
-                    : 'bg-red-600 text-white shadow-xs'
-                  : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700'
-              }`}
-            >
-              {st === 'ARCHIVED' ? '📦 Archived (Left Store)' : st === 'ALL' ? 'All Active' : st}
-            </button>
-          ))}
-        </div>
-      </div>
+      {/* Stock Items View: Grouped vs Flat List */}
+      {stockViewLayout === 'GROUPED' ? (
+        <div className="space-y-4">
+          {/* Grouped Header Summary & Expand/Collapse All */}
+          <div className="flex items-center justify-between text-xs font-bold text-slate-500 dark:text-slate-400 px-2">
+            <span>
+              Showing {groupedProducts.length} Product Model{groupedProducts.length === 1 ? '' : 's'} • {filteredItems.length} Total Physical Unit{filteredItems.length === 1 ? '' : 's'}
+            </span>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={expandAllGroups}
+                className="hover:text-slate-900 dark:hover:text-white hover:underline text-[11px]"
+              >
+                Expand All
+              </button>
+              <span>•</span>
+              <button
+                type="button"
+                onClick={collapseAllGroups}
+                className="hover:text-slate-900 dark:hover:text-white hover:underline text-[11px]"
+              >
+                Collapse All
+              </button>
+            </div>
+          </div>
 
-      {/* Stock Items Table */}
-      <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-xs overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse text-xs">
-            <thead>
-              <tr className="bg-slate-50 dark:bg-slate-950/60 border-b border-slate-100 dark:border-slate-800 text-slate-500 dark:text-slate-400 uppercase tracking-wider text-[10px]">
-                <th className="px-4 py-3">Stock ID</th>
-                <th className="px-4 py-3">Type</th>
-                <th className="px-4 py-3">Product Name & Model</th>
-                <th className="px-4 py-3">Brand</th>
-                <th className="px-4 py-3">Carton Barcode / Serial</th>
-                <th className="px-4 py-3">Selling Price</th>
-                <th className="px-4 py-3">Status</th>
-                <th className="px-4 py-3 text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-              {filteredItems.length === 0 ? (
-                <tr>
-                  <td colSpan={8} className="px-4 py-12 text-center text-slate-400">
-                    No matching stock items in store. Click "+ Add In-Store Stock" to log inventory.
-                  </td>
-                </tr>
-              ) : (
-                filteredItems.map((item, idx) => (
-                  <tr key={item.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/40 transition-colors">
-                    <td className="px-4 py-3 font-mono">
-                      <div className="font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
-                        <span className="px-2 py-0.5 rounded-md bg-red-100 dark:bg-red-950/60 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-900/40 text-[11px] font-black">
-                          {item.stockId || `${item.serialNo || item.id}-${idx + 1}`}
-                        </span>
-                      </div>
-                      <div className="text-[10px] text-slate-400 mt-0.5 font-mono">SKU: {item.id}</div>
-                    </td>
-                    <td className="px-4 py-3">
-                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
-                        {item.type}
-                      </span>
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="font-bold text-slate-900 dark:text-white">{item.name}</div>
-                      <div className="text-[11px] text-slate-500 font-mono">{item.modelNo}</div>
-                    </td>
-                    <td className="px-4 py-3 font-semibold text-slate-800 dark:text-slate-200">
-                      {item.brand}
-                    </td>
-                    <td className="px-4 py-3 font-mono text-[11px] text-slate-700 dark:text-slate-300">
-                      {item.serialNo ? (
-                        <span className="flex items-center gap-1 font-bold text-slate-800 dark:text-slate-200">
-                          <Barcode className="w-3.5 h-3.5 text-slate-400 shrink-0" />
-                          <span>{item.serialNo}</span>
-                        </span>
-                      ) : (
-                        <span className="text-slate-400 italic">None</span>
-                      )}
-                    </td>
-                    <td className="px-4 py-3 font-bold text-slate-900 dark:text-white">
-                      ₹{item.sellingPrice.toLocaleString('en-IN')}
-                    </td>
-                    <td className="px-4 py-3">
-                      <span
-                        className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
-                          item.isArchived || item.status === 'ARCHIVED'
-                            ? 'bg-amber-100 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-900/40'
-                            : item.status === 'AVAILABLE'
-                            ? 'bg-emerald-100 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300'
-                            : 'bg-slate-100 dark:bg-slate-800 text-slate-500'
-                        }`}
+          {groupedProducts.length === 0 ? (
+            <div className="p-12 text-center text-slate-400 bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800">
+              No matching equipment found in store. Click "+ Add In-Store Stock" to log inventory.
+            </div>
+          ) : (
+            groupedProducts.map((group) => {
+              const isCollapsed = collapsedGroups[group.key] ?? false;
+              return (
+                <div
+                  key={group.key}
+                  className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-xs overflow-hidden transition-all"
+                >
+                  {/* Group Header Card */}
+                  <div
+                    onClick={() => toggleGroupCollapse(group.key)}
+                    className="p-4 bg-slate-50/80 hover:bg-slate-100/80 dark:bg-slate-950/50 dark:hover:bg-slate-800/60 border-b border-slate-100 dark:border-slate-800 flex flex-col md:flex-row md:items-center justify-between gap-3 cursor-pointer select-none transition-colors"
+                  >
+                    {/* Brand Badge, Model Number & Name */}
+                    <div className="flex items-center gap-3">
+                      <button
+                        type="button"
+                        className="p-1 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 transition-transform"
                       >
-                        {item.isArchived || item.status === 'ARCHIVED' ? 'ARCHIVED' : item.status}
-                      </span>
-                      {item.assignedInvoiceId && (
-                        <div className="text-[10px] text-slate-400 font-mono mt-0.5">
-                          Inv: {item.assignedInvoiceId}
-                        </div>
-                      )}
-                      {(item.isArchived || item.status === 'ARCHIVED') && item.archivedReason && (
-                        <div className="text-[9px] text-amber-600 dark:text-amber-400 italic mt-0.5 max-w-[120px] truncate" title={item.archivedReason}>
-                          {item.archivedReason}
-                        </div>
-                      )}
-                    </td>
-                    <td className="px-4 py-3 text-right">
-                      <div className="flex items-center justify-end gap-1.5">
-                        {item.status === 'AVAILABLE' && !item.isArchived && (
-                          <>
-                            {onBillItem && (
-                              <button
-                                onClick={() => onBillItem(item)}
-                                className="px-2.5 py-1 bg-red-600 hover:bg-red-700 text-white rounded-lg text-[11px] font-bold transition-colors shadow-xs flex items-center gap-1"
-                                title="Create Bill with this Item"
-                              >
-                                <ShoppingBag className="w-3 h-3" />
-                                + Bill Item
-                              </button>
-                            )}
-                            <button
-                              onClick={() => markInventorySold(item.id)}
-                              className="px-2.5 py-1 bg-slate-100 dark:bg-slate-800 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 text-slate-700 dark:text-slate-300 hover:text-emerald-700 dark:hover:text-emerald-400 rounded-lg text-[11px] font-semibold transition-colors"
-                              title="Mark as Sold"
-                            >
-                              Mark Sold
-                            </button>
-                          </>
-                        )}
-                        <button
-                          onClick={() => setSelectedItemForLabel(item)}
-                          className="p-1.5 text-slate-500 hover:text-slate-900 dark:hover:text-white rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
-                          title="View / Print Product QR Code Label"
-                        >
-                          <QrCode className="w-3.5 h-3.5 text-red-500" />
-                        </button>
-                        <button
-                          onClick={() => handleStartDuplicate(item)}
-                          className="p-1.5 text-slate-500 hover:text-indigo-600 dark:hover:text-indigo-400 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
-                          title="Duplicate / Add More Units of this Product"
-                        >
-                          <Copy className="w-3.5 h-3.5 text-indigo-500" />
-                        </button>
-                        <button
-                          onClick={() => handleStartEdit(item)}
-                          className="p-1.5 text-slate-500 hover:text-blue-600 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
-                          title="Edit Item Details"
-                        >
-                          <Edit2 className="w-3.5 h-3.5" />
-                        </button>
-                        {item.isArchived || item.status === 'ARCHIVED' ? (
-                          <button
-                            onClick={() => unarchiveInventoryItem(item.id)}
-                            className="p-1.5 text-amber-600 hover:text-emerald-600 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
-                            title="Restore unit back to In-Store Available Stock"
-                          >
-                            <ArchiveRestore className="w-4 h-4" />
-                          </button>
+                        {isCollapsed ? (
+                          <ChevronRight className="w-5 h-5" />
                         ) : (
-                          <button
-                            onClick={() => {
-                              if (confirm(`Archive stock item ${item.name} (${item.serialNo})? It has left the store.`)) {
-                                archiveInventoryItem(item.id, 'Manually marked as left the store / installed');
-                              }
-                            }}
-                            className="p-1.5 text-slate-400 hover:text-amber-600 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
-                            title="Archive Item (Left Store & Installed)"
-                          >
-                            <Archive className="w-4 h-4" />
-                          </button>
+                          <ChevronDown className="w-5 h-5 text-red-600" />
                         )}
-                        <button
-                          onClick={() => {
-                            if (confirm(`Delete stock item ${item.name}?`)) {
-                              deleteInventoryItem(item.id);
-                            }
-                          }}
-                          className="p-1.5 text-slate-400 hover:text-red-600 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
-                          title="Delete Item"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
+                      </button>
+
+                      <div className="flex items-center gap-2.5 flex-wrap">
+                        <span className="px-2.5 py-1 rounded-lg bg-slate-900 text-white dark:bg-white dark:text-slate-900 text-xs font-black uppercase tracking-wider shadow-xs">
+                          {group.brand}
+                        </span>
+                        <div>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-mono font-black text-sm text-slate-900 dark:text-white">
+                              {group.modelNo}
+                            </span>
+                            <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
+                              {group.type}
+                            </span>
+                          </div>
+                          <p className="text-xs text-slate-600 dark:text-slate-400 font-medium">
+                            {group.name}
+                          </p>
+                        </div>
                       </div>
+                    </div>
+
+                    {/* Right: Unit Counts, Price & Quick Action */}
+                    <div
+                      className="flex items-center gap-3 flex-wrap self-end md:self-auto"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      {/* Selling Price */}
+                      <div className="text-right">
+                        <div className="text-[10px] uppercase font-bold text-slate-400">Unit Price</div>
+                        <div className="font-extrabold text-sm text-slate-900 dark:text-white font-mono">
+                          ₹{group.sellingPrice.toLocaleString('en-IN')}
+                        </div>
+                      </div>
+
+                      {/* Status counts badges */}
+                      <div className="flex items-center gap-1.5 bg-white dark:bg-slate-900 px-3 py-1.5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xs text-xs font-bold">
+                        <span className="text-slate-900 dark:text-white font-black text-sm font-mono mr-1">
+                          {group.items.length} {group.items.length === 1 ? 'Unit' : 'Units'}
+                        </span>
+                        {group.availableCount > 0 && (
+                          <span className="px-2 py-0.5 rounded-md bg-emerald-100 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 text-[11px] font-black">
+                            {group.availableCount} Available
+                          </span>
+                        )}
+                        {group.soldCount > 0 && (
+                          <span className="px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 text-[11px] font-bold">
+                            {group.soldCount} Sold
+                          </span>
+                        )}
+                        {group.archivedCount > 0 && (
+                          <span className="px-2 py-0.5 rounded-md bg-amber-100 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 text-[11px] font-bold">
+                            {group.archivedCount} Archived
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Quick Add Inward Unit of this Model */}
+                      <button
+                        type="button"
+                        onClick={() => handleQuickAddUnitForGroup(group)}
+                        className="px-2.5 py-1.5 bg-red-600 hover:bg-red-700 text-white rounded-xl text-xs font-bold shadow-xs flex items-center gap-1 transition-colors"
+                        title="Inward Another Unit of this Model"
+                      >
+                        <Plus className="w-3.5 h-3.5" />
+                        <span>+ Inward Unit</span>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Expanded Units Table for this Product Group */}
+                  {!isCollapsed && (
+                    <div className="overflow-x-auto border-t border-slate-100 dark:border-slate-800">
+                      <table className="w-full text-left border-collapse text-xs">
+                        <thead>
+                          <tr className="bg-white dark:bg-slate-900/60 border-b border-slate-100 dark:border-slate-800 text-slate-400 text-[10px] uppercase font-bold">
+                            <th className="px-4 py-2 w-12 text-center">Unit</th>
+                            <th className="px-4 py-2">Stock ID</th>
+                            <th className="px-4 py-2">Carton Barcode / Serial</th>
+                            <th className="px-4 py-2">Unit Price</th>
+                            <th className="px-4 py-2">Status</th>
+                            <th className="px-4 py-2 text-right">Actions</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                          {group.items.map((item, idx) => (
+                            <tr key={item.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/40 transition-colors">
+                              <td className="px-4 py-2.5 text-center font-bold font-mono text-slate-400 text-[11px]">
+                                #{idx + 1}
+                              </td>
+                              <td className="px-4 py-2.5 font-mono">
+                                <span className="px-2 py-0.5 rounded-md bg-red-100 dark:bg-red-950/60 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-900/40 text-[11px] font-black">
+                                  {item.stockId || `${item.serialNo || item.id}-${idx + 1}`}
+                                </span>
+                                <div className="text-[9px] text-slate-400 font-mono mt-0.5">SKU: {item.id}</div>
+                              </td>
+                              <td className="px-4 py-2.5 font-mono text-[11px] text-slate-700 dark:text-slate-300">
+                                {item.serialNo ? (
+                                  <span className="flex items-center gap-1 font-bold text-slate-800 dark:text-slate-200">
+                                    <Barcode className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                                    <span>{item.serialNo}</span>
+                                  </span>
+                                ) : (
+                                  <span className="text-slate-400 italic">None</span>
+                                )}
+                              </td>
+                              <td className="px-4 py-2.5 font-bold font-mono text-slate-900 dark:text-white">
+                                ₹{item.sellingPrice.toLocaleString('en-IN')}
+                              </td>
+                              <td className="px-4 py-2.5">
+                                <span
+                                  className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${
+                                    isItemArchived(item)
+                                      ? 'bg-amber-100 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-900/40'
+                                      : item.status === 'AVAILABLE'
+                                      ? 'bg-emerald-100 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300'
+                                      : 'bg-slate-100 dark:bg-slate-800 text-slate-500'
+                                  }`}
+                                >
+                                  {isItemArchived(item) ? 'ARCHIVED' : item.status}
+                                </span>
+                                {item.assignedInvoiceId && (
+                                  <div className="text-[10px] text-slate-400 font-mono mt-0.5">
+                                    Inv: {item.assignedInvoiceId}
+                                  </div>
+                                )}
+                              </td>
+                              <td className="px-4 py-2.5 text-right">
+                                <div className="flex items-center justify-end gap-1.5 flex-wrap">
+                                  {item.status === 'AVAILABLE' && !isItemArchived(item) && (
+                                    <>
+                                      {onBillItem && (
+                                        <button
+                                          onClick={() => onBillItem(item)}
+                                          className="px-2 py-0.5 bg-red-600 hover:bg-red-700 text-white rounded-lg text-[11px] font-bold transition-colors shadow-xs flex items-center gap-1"
+                                          title="Create Bill with this Item"
+                                        >
+                                          <ShoppingBag className="w-3 h-3" />
+                                          + Bill
+                                        </button>
+                                      )}
+                                      <button
+                                        onClick={() => markInventorySold(item.id)}
+                                        className="px-2 py-0.5 bg-slate-100 dark:bg-slate-800 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 text-slate-700 dark:text-slate-300 hover:text-emerald-700 dark:hover:text-emerald-400 rounded-lg text-[11px] font-semibold transition-colors"
+                                        title="Mark as Sold"
+                                      >
+                                        Mark Sold
+                                      </button>
+                                    </>
+                                  )}
+                                  <button
+                                    onClick={() => setSelectedItemForLabel(item)}
+                                    className="p-1.5 text-slate-500 hover:text-slate-900 dark:hover:text-white rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                                    title="View / Print Product QR Code Label"
+                                  >
+                                    <QrCode className="w-3.5 h-3.5 text-red-500" />
+                                  </button>
+                                  <button
+                                    onClick={() => handleStartDuplicate(item)}
+                                    className="p-1.5 text-slate-500 hover:text-indigo-600 dark:hover:text-indigo-400 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                                    title="Duplicate / Add More Units of this Product"
+                                  >
+                                    <Copy className="w-3.5 h-3.5 text-indigo-500" />
+                                  </button>
+                                  <button
+                                    onClick={() => handleStartEdit(item)}
+                                    className="p-1.5 text-slate-500 hover:text-blue-600 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                                    title="Edit Item Details"
+                                  >
+                                    <Edit2 className="w-3.5 h-3.5" />
+                                  </button>
+                                  {isItemArchived(item) ? (
+                                    <button
+                                      onClick={() => unarchiveInventoryItem(item.id)}
+                                      className="p-1.5 text-amber-600 hover:text-emerald-600 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                                      title="Restore unit back to In-Store Available Stock"
+                                    >
+                                      <ArchiveRestore className="w-4 h-4" />
+                                    </button>
+                                  ) : (
+                                    <button
+                                      onClick={() => {
+                                        if (confirm(`Archive stock item ${item.name} (${item.serialNo})? It has left the store.`)) {
+                                          archiveInventoryItem(item.id, 'Manually marked as left the store / installed');
+                                        }
+                                      }}
+                                      className="p-1.5 text-slate-400 hover:text-amber-600 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                                      title="Archive Item (Left Store & Installed)"
+                                    >
+                                      <Archive className="w-4 h-4" />
+                                    </button>
+                                  )}
+                                  <button
+                                    onClick={() => {
+                                      if (confirm(`Delete stock item ${item.name}?`)) {
+                                        deleteInventoryItem(item.id);
+                                      }
+                                    }}
+                                    className="p-1.5 text-slate-400 hover:text-red-600 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                                    title="Delete Item"
+                                  >
+                                    <Trash2 className="w-4 h-4" />
+                                  </button>
+                                </div>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              );
+            })
+          )}
+        </div>
+      ) : (
+        /* Flat List View (All Units in flat table) */
+        <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 shadow-xs overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse text-xs">
+              <thead>
+                <tr className="bg-slate-50 dark:bg-slate-950/60 border-b border-slate-100 dark:border-slate-800 text-slate-500 dark:text-slate-400 uppercase tracking-wider text-[10px]">
+                  <th className="px-4 py-3">Stock ID</th>
+                  <th className="px-4 py-3">Type</th>
+                  <th className="px-4 py-3">Product Name &amp; Model</th>
+                  <th className="px-4 py-3">Brand</th>
+                  <th className="px-4 py-3">Carton Barcode / Serial</th>
+                  <th className="px-4 py-3">Selling Price</th>
+                  <th className="px-4 py-3">Status</th>
+                  <th className="px-4 py-3 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                {filteredItems.length === 0 ? (
+                  <tr>
+                    <td colSpan={8} className="px-4 py-12 text-center text-slate-400">
+                      No matching stock items in store. Click "+ Add In-Store Stock" to log inventory.
                     </td>
                   </tr>
-                ))
-              )}
-            </tbody>
-          </table>
+                ) : (
+                  filteredItems.map((item, idx) => (
+                    <tr key={item.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/40 transition-colors">
+                      <td className="px-4 py-3 font-mono">
+                        <div className="font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
+                          <span className="px-2 py-0.5 rounded-md bg-red-100 dark:bg-red-950/60 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-900/40 text-[11px] font-black">
+                            {item.stockId || `${item.serialNo || item.id}-${idx + 1}`}
+                          </span>
+                        </div>
+                        <div className="text-[10px] text-slate-400 mt-0.5 font-mono">SKU: {item.id}</div>
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
+                          {item.type}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3">
+                        <div className="font-bold text-slate-900 dark:text-white">{item.name}</div>
+                        <div className="text-[11px] text-slate-500 font-mono">{item.modelNo}</div>
+                      </td>
+                      <td className="px-4 py-3 font-semibold text-slate-800 dark:text-slate-200">
+                        {item.brand}
+                      </td>
+                      <td className="px-4 py-3 font-mono text-[11px] text-slate-700 dark:text-slate-300">
+                        {item.serialNo ? (
+                          <span className="flex items-center gap-1 font-bold text-slate-800 dark:text-slate-200">
+                            <Barcode className="w-3.5 h-3.5 text-slate-400 shrink-0" />
+                            <span>{item.serialNo}</span>
+                          </span>
+                        ) : (
+                          <span className="text-slate-400 italic">None</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 font-bold text-slate-900 dark:text-white">
+                        ₹{item.sellingPrice.toLocaleString('en-IN')}
+                      </td>
+                      <td className="px-4 py-3">
+                        <span
+                          className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
+                            isItemArchived(item)
+                              ? 'bg-amber-100 dark:bg-amber-950/60 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-900/40'
+                              : item.status === 'AVAILABLE'
+                              ? 'bg-emerald-100 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300'
+                              : 'bg-slate-100 dark:bg-slate-800 text-slate-500'
+                          }`}
+                        >
+                          {isItemArchived(item) ? 'ARCHIVED' : item.status}
+                        </span>
+                        {item.assignedInvoiceId && (
+                          <div className="text-[10px] text-slate-400 font-mono mt-0.5">
+                            Inv: {item.assignedInvoiceId}
+                          </div>
+                        )}
+                        {isItemArchived(item) && item.archivedReason && (
+                          <div className="text-[9px] text-amber-600 dark:text-amber-400 italic mt-0.5 max-w-[120px] truncate" title={item.archivedReason}>
+                            {item.archivedReason}
+                          </div>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        <div className="flex items-center justify-end gap-1.5 flex-wrap">
+                          {item.status === 'AVAILABLE' && !isItemArchived(item) && (
+                            <>
+                              {onBillItem && (
+                                <button
+                                  onClick={() => onBillItem(item)}
+                                  className="px-2.5 py-1 bg-red-600 hover:bg-red-700 text-white rounded-lg text-[11px] font-bold transition-colors shadow-xs flex items-center gap-1"
+                                  title="Create Bill with this Item"
+                                >
+                                  <ShoppingBag className="w-3 h-3" />
+                                  + Bill Item
+                                </button>
+                              )}
+                              <button
+                                onClick={() => markInventorySold(item.id)}
+                                className="px-2.5 py-1 bg-slate-100 dark:bg-slate-800 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 text-slate-700 dark:text-slate-300 hover:text-emerald-700 dark:hover:text-emerald-400 rounded-lg text-[11px] font-semibold transition-colors"
+                                title="Mark as Sold"
+                              >
+                                Mark Sold
+                              </button>
+                            </>
+                          )}
+                          <button
+                            onClick={() => setSelectedItemForLabel(item)}
+                            className="p-1.5 text-slate-500 hover:text-slate-900 dark:hover:text-white rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                            title="View / Print Product QR Code Label"
+                          >
+                            <QrCode className="w-3.5 h-3.5 text-red-500" />
+                          </button>
+                          <button
+                            onClick={() => handleStartDuplicate(item)}
+                            className="p-1.5 text-slate-500 hover:text-indigo-600 dark:hover:text-indigo-400 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                            title="Duplicate / Add More Units of this Product"
+                          >
+                            <Copy className="w-3.5 h-3.5 text-indigo-500" />
+                          </button>
+                          <button
+                            onClick={() => handleStartEdit(item)}
+                            className="p-1.5 text-slate-500 hover:text-blue-600 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                            title="Edit Item Details"
+                          >
+                            <Edit2 className="w-3.5 h-3.5" />
+                          </button>
+                          {isItemArchived(item) ? (
+                            <button
+                              onClick={() => unarchiveInventoryItem(item.id)}
+                              className="p-1.5 text-amber-600 hover:text-emerald-600 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                              title="Restore unit back to In-Store Available Stock"
+                            >
+                              <ArchiveRestore className="w-4 h-4" />
+                            </button>
+                          ) : (
+                            <button
+                              onClick={() => {
+                                if (confirm(`Archive stock item ${item.name} (${item.serialNo})? It has left the store.`)) {
+                                  archiveInventoryItem(item.id, 'Manually marked as left the store / installed');
+                                }
+                              }}
+                              className="p-1.5 text-slate-400 hover:text-amber-600 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                              title="Archive Item (Left Store & Installed)"
+                            >
+                              <Archive className="w-4 h-4" />
+                            </button>
+                          )}
+                          <button
+                            onClick={() => {
+                              if (confirm(`Delete stock item ${item.name}?`)) {
+                                deleteInventoryItem(item.id);
+                              }
+                            }}
+                            className="p-1.5 text-slate-400 hover:text-red-600 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                            title="Delete Item"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))
+                )}
+              </tbody>
+            </table>
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Add Stock Modal */}
       {isAddOpen && (
@@ -842,13 +1378,14 @@ export const InventoryGodown: React.FC<InventoryGodownProps> = ({ onBillItem }) 
                       type="button"
                       onClick={() => setFormStockId(stripRandomSuffix(formStockId))}
                       className="text-[10px] font-bold text-red-600 dark:text-red-400 hover:underline flex items-center gap-0.5"
-                      title="Remove trailing random 4-digit codes from Stock ID"
+                      title="Remove trailing random 4 digits"
                     >
                       <Scissors className="w-3 h-3" />
                       Remove 4 Digits
                     </button>
                   )}
                 </div>
+
                 <input
                   type="text"
                   value={formStockId}
@@ -860,9 +1397,68 @@ export const InventoryGodown: React.FC<InventoryGodownProps> = ({ onBillItem }) 
                   }
                   className="w-full font-mono text-xs uppercase px-3 py-2 border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white rounded-xl focus:ring-2 focus:ring-red-500 outline-none"
                 />
-                <p className="text-[10px] text-slate-500 dark:text-slate-400">
-                  Preserves carton barcode unchanged while identifying each unit in stock.
-                </p>
+
+                {formStockId.trim() ? (
+                  <div className="space-y-2 pt-1 border-t border-red-200 dark:border-red-900/50">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setFormStockIncludePrefix(!formStockIncludePrefix)}
+                        className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-colors ${
+                          formStockIncludePrefix
+                            ? 'bg-red-600 text-white border-red-600 shadow-xs'
+                            : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-100'
+                        }`}
+                        title="Turn Stock ID prefix (STK-) On or Off"
+                      >
+                        <Tag className="w-3 h-3" />
+                        <span>Prefix (STK-)</span>
+                        <span className="text-[10px] font-black uppercase ml-0.5">
+                          {formStockIncludePrefix ? 'ON' : 'OFF'}
+                        </span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setFormStockIncludeDigits(!formStockIncludeDigits)}
+                        className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-colors ${
+                          formStockIncludeDigits
+                            ? 'bg-red-600 text-white border-red-600 shadow-xs'
+                            : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-100'
+                        }`}
+                        title="Turn 4-digit code On or Off"
+                      >
+                        <Hash className="w-3 h-3" />
+                        <span>Add 4 Digits</span>
+                        <span className="text-[10px] font-black uppercase ml-0.5">
+                          {formStockIncludeDigits ? 'ON' : 'OFF'}
+                        </span>
+                      </button>
+                    </div>
+
+                    <div className="flex items-center justify-between text-xs px-2.5 py-1.5 rounded-lg bg-white dark:bg-slate-800 border border-red-200 dark:border-red-900/50">
+                      <span className="text-[10px] text-slate-500 dark:text-slate-400 font-medium">Resulting Stock ID:</span>
+                      <span className="font-mono font-bold text-red-600 dark:text-red-400 text-xs">
+                        {(() => {
+                          let clean = formStockId.trim().toUpperCase();
+                          if (!formStockIncludePrefix && clean.startsWith('STK-')) {
+                            clean = clean.slice(4);
+                          } else if (formStockIncludePrefix && !clean.startsWith('STK-')) {
+                            clean = `STK-${clean}`;
+                          }
+                          if (formStockIncludeDigits) {
+                            clean = `${clean}-XXXX`;
+                          }
+                          return clean;
+                        })()}
+                      </span>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-[10px] text-slate-500 dark:text-slate-400">
+                    Pre-made Stock ID has prefix &amp; digits ON. To customize, enter custom ID above.
+                  </p>
+                )}
               </div>
 
               {/* Serial Number Handling Section */}
@@ -1285,7 +1881,7 @@ export const InventoryGodown: React.FC<InventoryGodownProps> = ({ onBillItem }) 
               </div>
 
               {/* Website Stock ID */}
-              <div className="p-3 bg-red-50/60 dark:bg-red-950/30 rounded-2xl border border-red-100 dark:border-red-900/40 space-y-1.5">
+              <div className="p-3 bg-red-50/60 dark:bg-red-950/30 rounded-2xl border border-red-100 dark:border-red-900/40 space-y-2">
                 <div className="flex items-center justify-between">
                   <label className="block font-bold text-slate-800 dark:text-slate-200 text-xs">
                     Website Stock ID:
@@ -1295,7 +1891,7 @@ export const InventoryGodown: React.FC<InventoryGodownProps> = ({ onBillItem }) 
                       type="button"
                       onClick={() => setEditStockId(stripRandomSuffix(editStockId))}
                       className="text-[10px] font-bold text-red-600 dark:text-red-400 hover:underline flex items-center gap-0.5"
-                      title="Remove 4-digit random number from Stock ID"
+                      title="Remove trailing random 4 digits"
                     >
                       <Scissors className="w-3 h-3" />
                       Remove 4 Digits
@@ -1306,12 +1902,71 @@ export const InventoryGodown: React.FC<InventoryGodownProps> = ({ onBillItem }) 
                   type="text"
                   value={editStockId}
                   onChange={(e) => setEditStockId(e.target.value.toUpperCase())}
-                  placeholder="e.g. DKN-FTKF50-01"
+                  placeholder="e.g. DKN-FTKF50-01 (or custom Stock ID)"
                   className="w-full font-mono text-xs uppercase px-3 py-2 border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white rounded-xl focus:ring-2 focus:ring-red-500 outline-none"
                 />
-                <p className="text-[10px] text-slate-500">
-                  Differentiates this unit in store while carton barcode stays intact.
-                </p>
+
+                {editStockId.trim() ? (
+                  <div className="space-y-2 pt-1 border-t border-red-200 dark:border-red-900/50">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setEditStockIncludePrefix(!editStockIncludePrefix)}
+                        className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-colors ${
+                          editStockIncludePrefix
+                            ? 'bg-red-600 text-white border-red-600 shadow-xs'
+                            : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-100'
+                        }`}
+                        title="Turn Stock ID prefix (STK-) On or Off"
+                      >
+                        <Tag className="w-3 h-3" />
+                        <span>Prefix (STK-)</span>
+                        <span className="text-[10px] font-black uppercase ml-0.5">
+                          {editStockIncludePrefix ? 'ON' : 'OFF'}
+                        </span>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setEditStockIncludeDigits(!editStockIncludeDigits)}
+                        className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-bold border transition-colors ${
+                          editStockIncludeDigits
+                            ? 'bg-red-600 text-white border-red-600 shadow-xs'
+                            : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-100'
+                        }`}
+                        title="Turn 4-digit code On or Off"
+                      >
+                        <Hash className="w-3 h-3" />
+                        <span>Add 4 Digits</span>
+                        <span className="text-[10px] font-black uppercase ml-0.5">
+                          {editStockIncludeDigits ? 'ON' : 'OFF'}
+                        </span>
+                      </button>
+                    </div>
+
+                    <div className="flex items-center justify-between text-xs px-2.5 py-1.5 rounded-lg bg-white dark:bg-slate-800 border border-red-200 dark:border-red-900/50">
+                      <span className="text-[10px] text-slate-500 dark:text-slate-400 font-medium">Resulting Stock ID:</span>
+                      <span className="font-mono font-bold text-red-600 dark:text-red-400 text-xs">
+                        {(() => {
+                          let clean = editStockId.trim().toUpperCase();
+                          if (!editStockIncludePrefix && clean.startsWith('STK-')) {
+                            clean = clean.slice(4);
+                          } else if (editStockIncludePrefix && !clean.startsWith('STK-')) {
+                            clean = `STK-${clean}`;
+                          }
+                          if (editStockIncludeDigits && !/[0-9]{4}$/.test(clean)) {
+                            clean = `${clean}-XXXX`;
+                          }
+                          return clean;
+                        })()}
+                      </span>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-[10px] text-slate-500 dark:text-slate-400">
+                    Pre-made Stock ID has prefix &amp; digits ON.
+                  </p>
+                )}
               </div>
 
               <div>
