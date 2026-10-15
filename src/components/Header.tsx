@@ -10,16 +10,23 @@ import {
   Moon,
   Lock,
   Sparkles,
+  Palette,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { LakhiLogo } from './common/LakhiLogo';
+import { PWAInstallButton } from './common/PWAInstallButton';
 
 interface HeaderProps {
   onOpenClaimsModal?: () => void;
   onOpenAiAssistant?: () => void;
+  onOpenBrandModal?: () => void;
 }
 
-export const Header: React.FC<HeaderProps> = ({ onOpenClaimsModal, onOpenAiAssistant }) => {
+export const Header: React.FC<HeaderProps> = ({
+  onOpenClaimsModal,
+  onOpenAiAssistant,
+  onOpenBrandModal,
+}) => {
   const {
     currentUser,
     isAdmin,
@@ -41,8 +48,18 @@ export const Header: React.FC<HeaderProps> = ({ onOpenClaimsModal, onOpenAiAssis
       <div className="max-w-7xl mx-auto px-2 sm:px-6 lg:px-8">
         <div className="flex items-center justify-between h-14 sm:h-18 md:h-20 gap-1.5 sm:gap-3 md:gap-4 w-full">
           {/* Brand & Lakhi Airconditioners Logo (Responsive: icon badge on mobile, full logo on tablet/desktop) */}
-          <div className="flex items-center shrink-0">
+          <div className="flex items-center gap-1.5 shrink-0">
             <LakhiLogo size="responsive" variant="auto" themeInvert={theme === 'dark'} />
+            {isAdmin && onOpenBrandModal && (
+              <button
+                onClick={onOpenBrandModal}
+                title="Change Brand Logos"
+                className="p-1 sm:p-1.5 text-slate-400 hover:text-red-600 dark:hover:text-red-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors flex items-center gap-1 text-[11px] font-bold"
+              >
+                <Palette className="w-3.5 h-3.5" />
+                <span className="hidden xl:inline">Change Logo</span>
+              </button>
+            )}
           </div>
 
           {/* Portal Switcher - Staff Portal is strictly visible only for authorized Admins */}
@@ -106,6 +123,9 @@ export const Header: React.FC<HeaderProps> = ({ onOpenClaimsModal, onOpenAiAssis
                 <span className="text-[10px] bg-white/20 px-1 py-0.2 rounded font-mono hidden md:inline">Admin</span>
               </button>
             )}
+
+            {/* Download / Install as Web App (Chrome, Edge, Safari, Android) */}
+            <PWAInstallButton />
 
             {/* Theme Toggle (Light / Dark Mode) */}
             <button

@@ -168,9 +168,25 @@
         "updatedAt": { "type": "string", "description": "Last update timestamp" }
       },
       "required": ["uid", "linkedCustomerIds", "updatedAt"]
+    },
+    "SystemConfig": {
+      "title": "SystemConfig",
+      "description": "System settings, admin UIDs, and custom brand logos",
+      "type": "object",
+      "properties": {
+        "adminUids": { "type": "array", "description": "Authorized admin UIDs" },
+        "gstNumber": { "type": "string", "description": "Store GSTIN" },
+        "logos": { "type": "object", "description": "Custom brand logos: 1x1 app icon, main logo, and main logo with word Lakhi" },
+        "updatedAt": { "type": "string", "description": "Update timestamp" },
+        "updatedBy": { "type": "string", "description": "User who updated config" }
+      }
     }
   },
   "firestore": {
+    "/system/{configId}": {
+      "schema": { "$ref": "#/entities/SystemConfig" },
+      "description": "System settings, admin UIDs, and brand logos"
+    },
     "/customers/{customerId}": {
       "schema": { "$ref": "#/entities/Customer" },
       "description": "Store customers directory"

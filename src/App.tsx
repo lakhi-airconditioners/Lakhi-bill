@@ -11,7 +11,11 @@ import { ClaimApprovals } from './components/staff/ClaimApprovals';
 import { AdminUidManager } from './components/staff/AdminUidManager';
 import { DuesKhataManager } from './components/staff/DuesKhataManager';
 import { CustomerPortal } from './components/customer/CustomerPortal';
+import { OfflineIndicator } from './components/common/OfflineIndicator';
+import { PWAInstallButton } from './components/common/PWAInstallButton';
 import { Quotation, Invoice } from './types';
+import { BrandLogoManager } from './components/staff/BrandLogoManager';
+import { BrandLogoModal } from './components/common/BrandLogoModal';
 import {
   Zap,
   FileCheck2,
@@ -23,6 +27,7 @@ import {
   ShieldCheck,
   Scale,
   Sparkles,
+  Palette,
 } from 'lucide-react';
 import { LakhiLogo } from './components/common/LakhiLogo';
 import { generateInvoicePdf, generateQuotationPdf } from './utils/pdfGenerator';
@@ -36,6 +41,7 @@ function MainApp() {
   // Navigation tab for staff - Quick Mode is first tab as requested
   const [activeStaffTab, setActiveStaffTab] = useState<string>('quick');
   const [isAiDrawerOpen, setIsAiDrawerOpen] = useState(false);
+  const [isBrandModalOpen, setIsBrandModalOpen] = useState(false);
 
   // Cross-workflow state passing
   const [quoteToConvert, setQuoteToConvert] = useState<Quotation | null>(null);
@@ -118,6 +124,7 @@ function MainApp() {
       icon: Clock,
       badge: pendingClaimsCount > 0 ? pendingClaimsCount : undefined,
     },
+    { id: 'branding', label: '🎨 Brand & Logos', icon: Palette },
     { id: 'admins', label: 'Admin UIDs List', icon: ShieldCheck },
   ];
 
@@ -126,6 +133,7 @@ function MainApp() {
       <Header
         onOpenClaimsModal={() => setActiveStaffTab('claims')}
         onOpenAiAssistant={() => setIsAiDrawerOpen(true)}
+        onOpenBrandModal={() => setIsBrandModalOpen(true)}
       />
 
       {/* Staff Operations: strictly visible only for authorized Admins */}
@@ -205,6 +213,8 @@ function MainApp() {
 
           {activeStaffTab === 'claims' && <ClaimApprovals />}
 
+          {activeStaffTab === 'branding' && <BrandLogoManager />}
+
           {activeStaffTab === 'admins' && <AdminUidManager />}
         </div>
       ) : (
@@ -225,7 +235,8 @@ function MainApp() {
               </span>
             </div>
           </div>
-          <div className="flex items-center gap-4 text-[11px] font-mono">
+          <div className="flex items-center gap-3 sm:gap-4 text-[11px] font-mono flex-wrap">
+            <PWAInstallButton />
             <span>[Type] + [YYYYMMDD] + [4-Digit]</span>
             <span className="text-emerald-600 dark:text-emerald-400 font-semibold">● Cloud Firestore Online</span>
           </div>
@@ -272,6 +283,15 @@ function MainApp() {
         filename={directPreviewFilename}
         title={directPreviewTitle}
       />
+
+      {/* Brand Logos Customizer Modal */}
+      <BrandLogoModal
+        isOpen={isBrandModalOpen}
+        onClose={() => setIsBrandModalOpen(false)}
+      />
+
+      {/* PWA Offline Connectivity Indicator */}
+      <OfflineIndicator />
     </div>
   );
 }

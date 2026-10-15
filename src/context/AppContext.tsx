@@ -28,6 +28,7 @@ import {
   TransactionRecord,
   VerificationClaim,
   AdminConfig,
+  BrandLogos,
   PdfProviderType,
   PayableRecord,
   PaymentMode,
@@ -42,6 +43,11 @@ interface AppContextType {
   // Store Business & GST Settings
   gstNumber: string;
   updateGstNumber: (newGst: string) => Promise<void>;
+
+  // Brand & Logos Customization
+  brandLogos: BrandLogos;
+  updateBrandLogos: (logos: Partial<BrandLogos>) => Promise<void>;
+  resetBrandLogo: (target: 'logo1x1' | 'logoMain' | 'logoWithWordmark' | 'all') => Promise<void>;
 
   // Auth & Roles
   currentUser: User | null;
@@ -253,6 +259,34 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // List of Admin UIDs and Store Config in Firebase
   const [adminUids, setAdminUids] = useState<string[]>([]);
   const [gstNumber, setGstNumber] = useState<string>('');
+  const [brandLogos, setBrandLogos] = useState<BrandLogos>(() => {
+    try {
+      const saved = localStorage.getItem('lakhi_brand_logos');
+      return saved ? JSON.parse(saved) : {};
+    } catch {
+      return {};
+    }
+  });
+
+  // Dynamically synchronize favicon / apple touch icon when logo1x1 is set
+  useEffect(() => {
+    if (brandLogos.logo1x1) {
+      const iconLinks = document.querySelectorAll<HTMLLinkElement>(
+        "link[rel='icon'], link[rel='apple-touch-icon'], link[rel='shortcut icon']"
+      );
+      if (iconLinks.length > 0) {
+        iconLinks.forEach((link) => {
+          link.href = brandLogos.logo1x1!;
+        });
+      } else {
+        const newLink = document.createElement('link');
+        newLink.rel = 'icon';
+        newLink.href = brandLogos.logo1x1;
+        document.head.appendChild(newLink);
+      }
+    }
+  }, [brandLogos.logo1x1]);
+
   const [isLoading, setIsLoading] = useState(true);
   const [isFirebaseConnected, setIsFirebaseConnected] = useState(false);
 
@@ -323,6 +357,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           setAdminUids(data.adminUids || []);
           if (data.gstNumber !== undefined) {
             setGstNumber(data.gstNumber || '');
+          }
+          if (data.logos !== undefined) {
+            const safeLogos = data.logos || {};
+            setBrandLogos(safeLogos);
+            try {
+              localStorage.setItem('lakhi_brand_logos', JSON.stringify(safeLogos));
+            } catch (e) {
+              console.warn('Failed to cache logos in localStorage', e);
+            }
           }
         } else {
           // If no admin doc exists, default list is empty
@@ -1360,6 +1403,69 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
+  const updateBrandLogos = async (newLogos: Partial<BrandLogos>) => {
+    try {
+      const merged: BrandLogos = {
+        ...brandLogos,
+        ...newLogos,
+        updatedAt: new Date().toISOString(),
+        updatedBy: currentUser?.email || 'admin',
+      };
+      if (newLogos.logo1x1 === '') delete merged.logo1x1;
+      if (newLogos.logoMain === '') delete merged.logoMain;
+      if (newLogos.logoWithWordmark === '') delete merged.logoWithWordmark;
+
+      await setDoc(
+        doc(db, 'system', 'admins'),
+        {
+          logos: merged,
+          updatedAt: new Date().toISOString(),
+          updatedBy: currentUser?.email || 'admin',
+        },
+        { merge: true }
+      );
+      setBrandLogos(merged);
+      try {
+        localStorage.setItem('lakhi_brand_logos', JSON.stringify(merged));
+      } catch (e) {
+        console.warn('Failed to cache logos in localStorage', e);
+      }
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, 'system/admins');
+    }
+  };
+
+  const resetBrandLogo = async (target: 'logo1x1' | 'logoMain' | 'logoWithWordmark' | 'all') => {
+    try {
+      let updated: BrandLogos = { ...brandLogos };
+      if (target === 'all') {
+        updated = {};
+      } else {
+        delete updated[target];
+      }
+      updated.updatedAt = new Date().toISOString();
+      updated.updatedBy = currentUser?.email || 'admin';
+
+      await setDoc(
+        doc(db, 'system', 'admins'),
+        {
+          logos: updated,
+          updatedAt: new Date().toISOString(),
+          updatedBy: currentUser?.email || 'admin',
+        },
+        { merge: true }
+      );
+      setBrandLogos(updated);
+      try {
+        localStorage.setItem('lakhi_brand_logos', JSON.stringify(updated));
+      } catch (e) {
+        console.warn('Failed to cache logos in localStorage', e);
+      }
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, 'system/admins');
+    }
+  };
+
   const addPayable = async (data: Omit<PayableRecord, 'id' | 'createdAt' | 'updatedAt'>) => {
     const id = `PAY-${Date.now()}`;
     const newPayable: PayableRecord = {
@@ -1420,6 +1526,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         toggleTheme,
         gstNumber,
         updateGstNumber,
+        brandLogos,
+        updateBrandLogos,
+        resetBrandLogo,
         currentUser,
         isAdmin,
         adminUids,

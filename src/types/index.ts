@@ -240,12 +240,21 @@ export interface PayableRecord {
   updatedAt?: string;
 }
 
+export interface BrandLogos {
+  logo1x1?: string; // App 1x1 Square Logo (Favicon, PWA icon, square avatar)
+  logoMain?: string; // Main Logo (Emblem / Graphic Symbol)
+  logoWithWordmark?: string; // Main Logo with Word "Lakhi" (Horizontal Banner Wordmark)
+  updatedAt?: string;
+  updatedBy?: string;
+}
+
 export interface AdminConfig {
   adminUids: string[];
   gstNumber?: string;
   businessName?: string;
   businessTagline?: string;
   businessPhone?: string;
+  logos?: BrandLogos;
   updatedAt?: string;
   updatedBy?: string;
 }

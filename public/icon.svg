@@ -1,0 +1,16 @@
+<svg viewBox="0 0 160 160" width="512" height="512" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Outer Circular Base -->
+  <circle cx="80" cy="80" r="74" fill="#111827" />
+
+  <!-- Red Quarter Arc (Top Right) -->
+  <path d="M 80 10 A 70 70 0 0 1 150 80 L 80 80 Z" fill="#DC2626" />
+
+  <!-- White Inner Lightning Circle -->
+  <circle cx="50" cy="80" r="27" stroke="#FFFFFF" stroke-width="5.5" fill="none" />
+
+  <!-- Lightning Bolt -->
+  <path d="M 52 58 L 40 81 L 49 81 L 46 101 L 60 76 L 51 76 Z" fill="#FFFFFF" />
+
+  <!-- Stylized L cutout -->
+  <path d="M 76 22 L 98 22 L 98 114 C 98 126 108 134 122 134 L 140 134 L 140 148 L 118 148 C 92 148 76 132 76 110 Z" fill="#FFFFFF" />
+</svg>
