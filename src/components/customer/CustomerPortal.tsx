@@ -37,6 +37,7 @@ import {
   Trash2,
   ShieldAlert,
   X,
+  Bell,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { generateInvoicePdf, generateQuotationPdf } from '../../utils/pdfGenerator';
@@ -44,6 +45,20 @@ import { resolvePdfLinks } from '../../utils/cloudPdfHelper';
 import { PdfPreviewModal } from '../common/PdfPreviewModal';
 import { Invoice, Quotation, Customer, Shipment, ShipmentStatus } from '../../types';
 import { LakhiLogo } from '../common/LakhiLogo';
+import {
+  getActiveClaim,
+  saveActiveClaim,
+  clearActiveClaim,
+  PersistentClaimData,
+} from '../../utils/pwaSessionHelper';
+import {
+  generateCustomerNotifications,
+  sendBrowserPushNotification,
+  requestBrowserNotificationPermission,
+  AppNotification,
+} from '../../utils/notificationService';
+import { CustomerNotificationsModal } from './CustomerNotificationsModal';
+import { CustomerAiAssistantModal } from './CustomerAiAssistantModal';
 
 const STAGES: { status: ShipmentStatus; stepNumber: number; title: string; subtitle: string }[] = [
   { status: 'ORDER_PLACED', stepNumber: 1, title: 'Order Placed', subtitle: 'Sourcing registered in Lakhi system' },
@@ -59,6 +74,7 @@ export const CustomerPortal: React.FC = () => {
     activeCustomer,
     loginCustomerById,
     loginCustomerByPhone,
+    loginCustomerByCodeOrPhone,
     findCustomerByPhone,
     logoutCustomer,
     linkCustomerAccount,
@@ -79,8 +95,10 @@ export const CustomerPortal: React.FC = () => {
     gstNumber,
   } = useApp();
 
-  // Authentication State
-  const [loginMethod, setLoginMethod] = useState<'ID' | 'PHONE' | 'CLAIM'>('ID');
+  // Authentication State - SMART login is default
+  const [loginMethod, setLoginMethod] = useState<'SMART' | 'ID' | 'PHONE' | 'CLAIM'>('SMART');
+  const [smartInput, setSmartInput] = useState('');
+  const [smartPin, setSmartPin] = useState('');
   const [inputId, setInputId] = useState('');
   const [inputPin, setInputPin] = useState('');
   const [inputPhone, setInputPhone] = useState('');
@@ -91,6 +109,69 @@ export const CustomerPortal: React.FC = () => {
   const [isSearchingPhone, setIsSearchingPhone] = useState(false);
   const [copiedInvoiceId, setCopiedInvoiceId] = useState<string | null>(null);
   const [copiedCustId, setCopiedCustId] = useState(false);
+
+  // Persistent 72-Hour Claim State (Stored in localStorage so refresh preserves active code & timer)
+  const [savedClaim, setSavedClaim] = useState<PersistentClaimData | null>(() => getActiveClaim());
+  const [claimName, setClaimName] = useState('');
+  const [claimPhone, setClaimPhone] = useState('');
+  const [claimNotes, setClaimNotes] = useState('');
+  const [generatedClaimCode, setGeneratedClaimCode] = useState<string | null>(() => getActiveClaim()?.code || null);
+  const [isSubmittingClaim, setIsSubmittingClaim] = useState(false);
+
+  // Sync claim from localStorage on mount
+  useEffect(() => {
+    const currentClaim = getActiveClaim();
+    if (currentClaim) {
+      setSavedClaim(currentClaim);
+      setGeneratedClaimCode(currentClaim.code);
+    }
+  }, []);
+
+  // Notifications State & Center Modal
+  const [isNotificationsOpen, setIsNotificationsOpen] = useState(false);
+  const [isAiAssistantOpen, setIsAiAssistantOpen] = useState(false);
+  const [readNotifIds, setReadNotifIds] = useState<Set<string>>(() => {
+    try {
+      const saved = localStorage.getItem('lakhi_read_notifications');
+      return saved ? new Set(JSON.parse(saved)) : new Set();
+    } catch {
+      return new Set();
+    }
+  });
+
+  // Calculate notifications for active customer
+  const customerNotifications = React.useMemo(() => {
+    if (!activeCustomer) return [];
+    return generateCustomerNotifications(
+      activeCustomer,
+      invoices,
+      shipments,
+      quotations,
+      readNotifIds
+    );
+  }, [activeCustomer, invoices, shipments, quotations, readNotifIds]);
+
+  const unreadNotifCount = customerNotifications.filter((n) => !n.isRead).length;
+
+  const handleMarkNotifAsRead = (id: string) => {
+    setReadNotifIds((prev) => {
+      const next = new Set(prev);
+      next.add(id);
+      try {
+        localStorage.setItem('lakhi_read_notifications', JSON.stringify(Array.from(next)));
+      } catch {}
+      return next;
+    });
+  };
+
+  const handleMarkAllNotifsAsRead = () => {
+    const allIds = customerNotifications.map((n) => n.id);
+    const next = new Set([...readNotifIds, ...allIds]);
+    setReadNotifIds(next);
+    try {
+      localStorage.setItem('lakhi_read_notifications', JSON.stringify(Array.from(next)));
+    } catch {}
+  };
 
   // Quick Account Link Confirmation Prompt Modal (Asking if they want to add/link account to Firebase for quick sign in)
   const [pendingAccountToLink, setPendingAccountToLink] = useState<Customer | null>(null);
@@ -117,18 +198,12 @@ export const CustomerPortal: React.FC = () => {
       const params = new URLSearchParams(window.location.search);
       const cid = params.get('cid');
       if (cid) {
+        setSmartInput(cid);
         setInputId(cid);
-        setLoginMethod('ID');
+        setLoginMethod('SMART');
       }
     }
   }, []);
-
-  // 72-Hour Claim Generator State
-  const [claimName, setClaimName] = useState('');
-  const [claimPhone, setClaimPhone] = useState('');
-  const [claimNotes, setClaimNotes] = useState('');
-  const [generatedClaimCode, setGeneratedClaimCode] = useState<string | null>(null);
-  const [isSubmittingClaim, setIsSubmittingClaim] = useState(false);
 
   // Active Tab within Customer Portal
   const [activeTab, setActiveTab] = useState<'TRACKING' | 'INVOICES' | 'WARRANTY' | 'LEDGER' | 'QUOTES'>('TRACKING');
@@ -144,6 +219,25 @@ export const CustomerPortal: React.FC = () => {
   const [linkEmailInput, setLinkEmailInput] = useState('');
   const [linkSuccess, setLinkSuccess] = useState(false);
 
+  // Handler for Smart Universal Login (Customer ID or Phone Number + PIN)
+  const handleSmartLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoginError('');
+    setLoginLoading(true);
+    try {
+      const res = await loginCustomerByCodeOrPhone(smartInput, smartPin);
+      if (!res.success) {
+        setLoginError(res.message);
+      } else if (res.customer) {
+        if (currentUser && !userLinkedCustomerIds.includes(res.customer.id)) {
+          setPendingAccountToLink(res.customer);
+        }
+      }
+    } finally {
+      setLoginLoading(false);
+    }
+  };
+
   // Handler for Direct Login by ID + PIN
   const handleLoginById = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -154,7 +248,6 @@ export const CustomerPortal: React.FC = () => {
       if (!res.success) {
         setLoginError(res.message);
       } else {
-        // If logged into Firebase and account is not yet linked for quick sign-in, prompt user!
         const matched = customers.find((c) => c.id === inputId.trim().toUpperCase());
         if (matched && currentUser && !userLinkedCustomerIds.includes(matched.id)) {
           setPendingAccountToLink(matched);
@@ -209,6 +302,16 @@ export const CustomerPortal: React.FC = () => {
     setIsSubmittingClaim(true);
     try {
       const code = await submitVerificationClaim(claimName, claimPhone, claimNotes);
+      const claimData: PersistentClaimData = {
+        code,
+        name: claimName.trim(),
+        phone: claimPhone.trim(),
+        notes: claimNotes.trim(),
+        createdAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + 72 * 60 * 60 * 1000).toISOString(),
+      };
+      saveActiveClaim(claimData);
+      setSavedClaim(claimData);
       setGeneratedClaimCode(code);
     } finally {
       setIsSubmittingClaim(false);
@@ -430,34 +533,27 @@ export const CustomerPortal: React.FC = () => {
         <div className="bg-white dark:bg-slate-900 rounded-3xl border border-slate-200 dark:border-slate-800 p-6 sm:p-8 shadow-sm space-y-6">
           <div className="flex border-b border-slate-100 dark:border-slate-800 pb-3 gap-2">
             <button
-              onClick={() => { setLoginMethod('ID'); setLoginError(''); }}
+              onClick={() => { setLoginMethod('SMART'); setLoginError(''); }}
               className={`flex-1 py-2.5 rounded-xl text-xs font-bold transition-all ${
-                loginMethod === 'ID'
+                loginMethod === 'SMART'
                   ? 'bg-red-600 text-white shadow-xs shadow-red-600/30'
                   : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200'
               }`}
             >
-              Customer ID + PIN
-            </button>
-            <button
-              onClick={() => { setLoginMethod('PHONE'); setLoginError(''); }}
-              className={`flex-1 py-2.5 rounded-xl text-xs font-bold transition-all ${
-                loginMethod === 'PHONE'
-                  ? 'bg-red-600 text-white shadow-xs shadow-red-600/30'
-                  : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200'
-              }`}
-            >
-              Phone + PIN Login
+              Sign In (ID or Phone + PIN)
             </button>
             <button
               onClick={() => { setLoginMethod('CLAIM'); setLoginError(''); }}
-              className={`flex-1 py-2.5 rounded-xl text-xs font-bold transition-all ${
+              className={`flex-1 py-2.5 rounded-xl text-xs font-bold transition-all relative ${
                 loginMethod === 'CLAIM'
                   ? 'bg-red-600 text-white shadow-xs shadow-red-600/30'
                   : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200'
               }`}
             >
-              72h Claim Code
+              <span>72h Claim Code</span>
+              {(savedClaim || generatedClaimCode) && (
+                <span className="w-2 h-2 rounded-full bg-amber-400 animate-ping absolute top-2 right-2" />
+              )}
             </button>
           </div>
 
@@ -468,36 +564,32 @@ export const CustomerPortal: React.FC = () => {
             </div>
           )}
 
-          {/* Form 1: Customer ID + PIN */}
-          {loginMethod === 'ID' && (
-            <form onSubmit={handleLoginById} className="space-y-4">
+          {/* Form 1: SMART Universal Login (ID or Phone + PIN with bidirectional +91 matcher) */}
+          {loginMethod === 'SMART' && (
+            <form onSubmit={handleSmartLogin} className="space-y-4">
               <div>
-                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1.5">
-                  Customer ID (C...):
+                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1.5 flex items-center justify-between">
+                  <span>Customer ID or Registered Mobile:</span>
+                  <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-bold lowercase">
+                    auto-detects +91, 0, or raw
+                  </span>
                 </label>
                 <input
                   type="text"
                   required
-                  value={inputId}
-                  onChange={(e) => setInputId(e.target.value)}
-                  placeholder="e.g. C202610094102"
+                  value={smartInput}
+                  onChange={(e) => setSmartInput(e.target.value)}
+                  placeholder="e.g. C202610094102 or +91 98765 43210 or 9876543210"
                   className="w-full text-xs font-mono uppercase px-3.5 py-3 border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white rounded-xl focus:ring-2 focus:ring-red-500 outline-none"
                 />
-                <div className="flex items-center justify-between mt-1.5 text-[11px]">
-                  <button
-                    type="button"
-                    onClick={() => { setLoginMethod('PHONE'); setLoginError(''); }}
-                    className="text-red-600 dark:text-red-400 font-bold hover:underline flex items-center gap-1"
-                  >
-                    <Search className="w-3 h-3" />
-                    Sign in with phone & PIN
-                  </button>
+                <div className="flex items-center justify-between mt-1.5 text-[11px] text-slate-400">
+                  <span>Supports any format (+91..., 0..., 91..., or raw digits)</span>
                   <button
                     type="button"
                     onClick={() => { setLoginMethod('CLAIM'); setLoginError(''); }}
-                    className="text-slate-500 hover:text-red-600 hover:underline"
+                    className="text-red-600 dark:text-red-400 font-bold hover:underline"
                   >
-                    Request login code
+                    Don't have PIN? Use 72h Claim
                   </button>
                 </div>
               </div>
@@ -510,152 +602,183 @@ export const CustomerPortal: React.FC = () => {
                   type="password"
                   required
                   maxLength={4}
-                  value={inputPin}
-                  onChange={(e) => setInputPin(e.target.value)}
-                  placeholder="••••"
-                  className="w-full text-xs font-mono px-3.5 py-3 border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white rounded-xl focus:ring-2 focus:ring-red-500 outline-none"
-                />
-                <span className="text-[11px] text-slate-400 mt-1.5 block">
-                  Printed on your Lakhi bill receipt.
-                </span>
-              </div>
-
-              <button
-                type="submit"
-                disabled={loginLoading}
-                className="w-full py-3.5 bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition-all shadow-sm shadow-red-600/30"
-              >
-                {loginLoading ? 'Verifying Account...' : 'Access My Dashboard →'}
-              </button>
-            </form>
-          )}
-
-          {/* Form 2: Phone + PIN Login */}
-          {loginMethod === 'PHONE' && (
-            <form onSubmit={handleLoginByPhoneAndPin} className="space-y-4">
-              <div>
-                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1.5">
-                  Registered Mobile Phone:
-                </label>
-                <input
-                  type="tel"
-                  required
-                  value={inputPhone}
-                  onChange={(e) => setInputPhone(e.target.value)}
-                  placeholder="+91..."
-                  className="w-full text-xs px-3.5 py-3 border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white rounded-xl focus:ring-2 focus:ring-red-500 outline-none"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider mb-1.5">
-                  4-Digit Account PIN:
-                </label>
-                <input
-                  type="password"
-                  required
-                  maxLength={4}
-                  value={phoneLoginPin}
-                  onChange={(e) => setPhoneLoginPin(e.target.value)}
+                  value={smartPin}
+                  onChange={(e) => setSmartPin(e.target.value)}
                   placeholder="••••"
                   className="w-full text-xs font-mono px-3.5 py-3 border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white rounded-xl focus:ring-2 focus:ring-red-500 outline-none"
                 />
                 <span className="text-[11px] text-slate-400 mt-1 block">
-                  Mandatory PIN security is enforced for all customer phone logins.
+                  Printed on your Lakhi bill receipt or provided by store staff.
                 </span>
-              </div>
-
-              <div className="flex gap-2">
-                <button
-                  type="submit"
-                  disabled={loginLoading || !inputPhone || phoneLoginPin.length !== 4}
-                  className="flex-1 py-3 bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition-all shadow-sm"
-                >
-                  {loginLoading ? 'Verifying Account...' : 'Sign In With Phone & PIN →'}
-                </button>
-                <button
-                  type="button"
-                  onClick={handleFindIdByPhone}
-                  disabled={isSearchingPhone || !inputPhone}
-                  className="px-4 py-3 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-700 dark:text-slate-300 rounded-xl text-xs font-bold transition-all"
-                >
-                  {isSearchingPhone ? 'Searching...' : 'Lookup ID'}
-                </button>
-              </div>
-
-              {foundCustomerResult && (
-                <div className="p-4 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 rounded-2xl space-y-2 text-xs">
-                  <div className="font-bold text-emerald-900 dark:text-emerald-200">
-                    Account Found: {foundCustomerResult.externalName}
-                  </div>
-                  <div className="font-mono text-emerald-800 dark:text-emerald-300">
-                    Customer ID: <strong>{foundCustomerResult.id}</strong>
-                  </div>
-                  <p className="text-[11px] text-slate-500">
-                    Enter your 4-digit PIN above to complete sign-in.
-                  </p>
-                </div>
-              )}
-            </form>
-          )}
-
-          {/* Form 3: 72h Claim Code */}
-          {loginMethod === 'CLAIM' && (
-            <form onSubmit={handleGenerateClaim} className="space-y-3 text-xs">
-              <div>
-                <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">Your Full Name:</label>
-                <input
-                  type="text"
-                  required
-                  value={claimName}
-                  onChange={(e) => setClaimName(e.target.value)}
-                  placeholder="Legal Customer Name"
-                  className="w-full px-3 py-2 border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white rounded-xl"
-                />
-              </div>
-
-              <div>
-                <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">Mobile Phone:</label>
-                <input
-                  type="tel"
-                  required
-                  value={claimPhone}
-                  onChange={(e) => setClaimPhone(e.target.value)}
-                  placeholder="+91..."
-                  className="w-full px-3 py-2 border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white rounded-xl"
-                />
-              </div>
-
-              <div>
-                <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">Bill Reference (Optional):</label>
-                <input
-                  type="text"
-                  value={claimNotes}
-                  onChange={(e) => setClaimNotes(e.target.value)}
-                  placeholder="e.g. Bought 2x Daikin AC in May"
-                  className="w-full px-3 py-2 border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white rounded-xl"
-                />
               </div>
 
               <button
                 type="submit"
-                disabled={isSubmittingClaim}
-                className="w-full py-3 bg-red-600 hover:bg-red-700 text-white rounded-xl font-bold shadow-sm"
+                disabled={loginLoading || !smartInput.trim() || smartPin.length !== 4}
+                className="w-full py-3.5 bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition-all shadow-sm shadow-red-600/30 flex items-center justify-center gap-2"
               >
-                {isSubmittingClaim ? 'Generating Code...' : 'Generate 72-Hour Claim Code'}
+                {loginLoading ? 'Verifying Credentials...' : 'Access My Dashboard →'}
               </button>
-
-              {generatedClaimCode && (
-                <div className="p-4 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-900 rounded-2xl text-center space-y-1">
-                  <span className="text-[10px] text-slate-500 uppercase font-bold">Your Verification Code:</span>
-                  <div className="text-2xl font-black font-mono text-red-600">{generatedClaimCode}</div>
-                  <p className="text-[10px] text-slate-500">
-                    Share this 6-digit code with Lakhi store staff or WhatsApp to +91 99980 21446 for instant approval.
-                  </p>
-                </div>
-              )}
             </form>
           )}
+
+          {/* Form 2: 72h Claim Code (with live persistence across page refreshes!) */}
+          {loginMethod === 'CLAIM' && (() => {
+            const activeCode = savedClaim?.code || generatedClaimCode;
+            const liveClaimDoc = claims.find((c) => c.id === activeCode);
+            const isApproved = liveClaimDoc?.status === 'APPROVED';
+            const isRejected = liveClaimDoc?.status === 'REJECTED';
+
+            const calculateCountdown = () => {
+              if (!savedClaim?.expiresAt) return 'Active';
+              const diff = new Date(savedClaim.expiresAt).getTime() - Date.now();
+              if (diff <= 0) return 'Expired';
+              const hours = Math.floor(diff / (1000 * 60 * 60));
+              const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+              return `${hours}h ${minutes}m remaining`;
+            };
+
+            if (activeCode) {
+              return (
+                <div className="space-y-4">
+                  <div
+                    className={`p-5 rounded-2xl border text-center space-y-3 ${
+                      isApproved
+                        ? 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-300 dark:border-emerald-800'
+                        : isRejected
+                        ? 'bg-red-50 dark:bg-red-950/40 border-red-300 dark:border-red-900'
+                        : 'bg-amber-50/60 dark:bg-amber-950/40 border-amber-200 dark:border-amber-900/60'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between pb-2 border-b border-black/5 dark:border-white/5">
+                      <span className="text-[10px] uppercase font-black tracking-wider text-slate-500">
+                        72-Hour Verification Claim (Preserved on Refresh)
+                      </span>
+                      <span
+                        className={`text-[10px] font-black px-2 py-0.5 rounded-full ${
+                          isApproved
+                            ? 'bg-emerald-600 text-white'
+                            : isRejected
+                            ? 'bg-red-600 text-white'
+                            : 'bg-amber-500 text-white animate-pulse'
+                        }`}
+                      >
+                        {liveClaimDoc?.status || 'PENDING STORE VERIFICATION'}
+                      </span>
+                    </div>
+
+                    <div>
+                      <span className="text-[11px] text-slate-500 block">Your 6-Digit Claim Code:</span>
+                      <div className="text-3xl font-black font-mono tracking-widest text-red-600 dark:text-red-400 mt-1">
+                        {activeCode}
+                      </div>
+                    </div>
+
+                    <div className="text-xs text-slate-600 dark:text-slate-300 space-y-1">
+                      <div>Name: <strong>{savedClaim?.name || claimName || 'Customer'}</strong></div>
+                      <div>Phone: <strong>{savedClaim?.phone || claimPhone}</strong></div>
+                      {!isApproved && !isRejected && (
+                        <div className="text-[11px] font-mono font-bold text-amber-700 dark:text-amber-400 pt-1 flex items-center justify-center gap-1">
+                          <Clock className="w-3.5 h-3.5" />
+                          <span>Lifetime: {calculateCountdown()}</span>
+                        </div>
+                      )}
+                    </div>
+
+                    {isApproved && liveClaimDoc?.matchedCustomerId && (
+                      <div className="pt-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSmartInput(liveClaimDoc.matchedCustomerId || '');
+                            setLoginMethod('SMART');
+                          }}
+                          className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold transition-all shadow-xs"
+                        >
+                          🎉 Claim Approved! Click to Enter PIN & Sign In →
+                        </button>
+                      </div>
+                    )}
+
+                    {!isApproved && (
+                      <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                        Share this code with Lakhi store staff in person or WhatsApp to{' '}
+                        <a href="https://wa.me/919998021446" className="text-red-600 dark:text-red-400 font-bold hover:underline">
+                          +91 99980 21446
+                        </a>{' '}
+                        for immediate account verification.
+                      </p>
+                    )}
+
+                    <div className="pt-2 flex gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          clearActiveClaim();
+                          setSavedClaim(null);
+                          setGeneratedClaimCode(null);
+                        }}
+                        className="w-full py-2 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-600 dark:text-slate-300 rounded-xl text-[11px] font-bold transition-colors"
+                      >
+                        Clear & Generate New Claim
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              );
+            }
+
+            return (
+              <form onSubmit={handleGenerateClaim} className="space-y-3 text-xs">
+                <p className="text-slate-500 text-[11px] leading-relaxed">
+                  Lost your Customer ID or PIN? Generate a temporary 72-hour verification claim. The claim persists across page refreshes and can be verified by store staff.
+                </p>
+
+                <div>
+                  <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">Your Full Name:</label>
+                  <input
+                    type="text"
+                    required
+                    value={claimName}
+                    onChange={(e) => setClaimName(e.target.value)}
+                    placeholder="Legal Customer Name"
+                    className="w-full px-3 py-2 border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white rounded-xl"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">Mobile Phone:</label>
+                  <input
+                    type="tel"
+                    required
+                    value={claimPhone}
+                    onChange={(e) => setClaimPhone(e.target.value)}
+                    placeholder="+91..."
+                    className="w-full px-3 py-2 border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white rounded-xl"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">Bill Reference (Optional):</label>
+                  <input
+                    type="text"
+                    value={claimNotes}
+                    onChange={(e) => setClaimNotes(e.target.value)}
+                    placeholder="e.g. Bought 2x Daikin AC in May"
+                    className="w-full px-3 py-2 border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white rounded-xl"
+                  />
+                </div>
+
+                <button
+                  type="submit"
+                  disabled={isSubmittingClaim}
+                  className="w-full py-3 bg-red-600 hover:bg-red-700 text-white rounded-xl font-bold shadow-sm"
+                >
+                  {isSubmittingClaim ? 'Generating Code...' : 'Generate 72-Hour Claim Code'}
+                </button>
+              </form>
+            );
+          })()}
         </div>
 
         {/* STORE CONTACT, TIMINGS & SCHEDULE INFO CARD */}
@@ -795,6 +918,31 @@ export const CustomerPortal: React.FC = () => {
               </button>
             )}
 
+            {/* In-App Notifications Center Button */}
+            <button
+              onClick={() => setIsNotificationsOpen(true)}
+              className="relative px-3 py-2 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-700 dark:text-slate-300 rounded-xl text-xs font-bold transition-colors flex items-center gap-1.5"
+              title="View all notifications and live order updates"
+            >
+              <Bell className="w-4 h-4 text-slate-600 dark:text-slate-300" />
+              <span className="hidden sm:inline">Updates</span>
+              {unreadNotifCount > 0 && (
+                <span className="flex items-center justify-center min-w-[18px] h-[18px] px-1 bg-red-600 text-white text-[10px] font-black rounded-full ring-2 ring-white dark:ring-slate-900 animate-pulse">
+                  {unreadNotifCount}
+                </span>
+              )}
+            </button>
+
+            {/* Customer Copilot AI Button */}
+            <button
+              onClick={() => setIsAiAssistantOpen(true)}
+              className="px-3.5 py-2 bg-gradient-to-r from-red-600 to-amber-600 hover:from-red-700 hover:to-amber-700 text-white rounded-xl text-xs font-bold transition-all shadow-xs shadow-red-600/30 flex items-center gap-1.5"
+              title="Ask Lakhi AI about your orders, invoices, or balance"
+            >
+              <Sparkles className="w-3.5 h-3.5" />
+              <span className="hidden md:inline">Ask Lakhi AI</span>
+            </button>
+
             <button
               onClick={logoutCustomer}
               className="px-3.5 py-2 bg-slate-100 dark:bg-slate-800 hover:bg-red-50 dark:hover:bg-red-950/40 hover:text-red-600 text-slate-700 dark:text-slate-300 rounded-xl text-xs font-bold transition-colors flex items-center gap-1.5"
@@ -805,6 +953,50 @@ export const CustomerPortal: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* Browser Notification Suggestion Banner */}
+      {typeof window !== 'undefined' && 'Notification' in window && Notification.permission !== 'granted' && (
+        <div className="bg-gradient-to-r from-red-50 via-amber-50 to-orange-50 dark:from-red-950/40 dark:via-amber-950/40 dark:to-orange-950/40 border border-red-200 dark:border-red-900/60 rounded-2xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-red-600 text-white flex items-center justify-center shrink-0 shadow-sm shadow-red-600/30">
+              <Bell className="w-5 h-5 animate-bounce" />
+            </div>
+            <div>
+              <h4 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                <span>Turn on Notifications for Live Updates</span>
+                <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full bg-red-100 text-red-700 dark:bg-red-900/60 dark:text-red-300">
+                  Recommended
+                </span>
+              </h4>
+              <p className="text-xs text-slate-600 dark:text-slate-400">
+                Receive instant browser alerts when an invoice is added, your AC order is dispatched or out for delivery, and quotes are prepared.
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 self-end sm:self-auto shrink-0">
+            <button
+              onClick={async () => {
+                const res = await requestBrowserNotificationPermission();
+                if (res) {
+                  sendBrowserPushNotification('🔔 Notifications Enabled', {
+                    body: 'You will now receive live alerts for your orders, shipments, and invoices from Lakhi Electronics.',
+                  });
+                }
+              }}
+              className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-xl text-xs font-bold transition-all shadow-xs flex items-center gap-1.5"
+            >
+              <Bell className="w-3.5 h-3.5" />
+              <span>Allow Notifications</span>
+            </button>
+            <button
+              onClick={() => setIsNotificationsOpen(true)}
+              className="px-3.5 py-2 bg-white dark:bg-slate-800 hover:bg-slate-100 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 rounded-xl text-xs font-bold transition-colors"
+            >
+              View Update Log
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* Tabs Bar */}
       <div className="bg-white dark:bg-slate-900 p-2 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xs flex items-center gap-1.5 overflow-x-auto">
@@ -1688,6 +1880,50 @@ export const CustomerPortal: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* Floating Ask AI Button for Quick Access */}
+      <div className="fixed bottom-6 right-6 z-40">
+        <button
+          onClick={() => setIsAiAssistantOpen(true)}
+          className="group flex items-center gap-2.5 px-4 py-3 bg-gradient-to-r from-red-600 via-rose-600 to-amber-600 text-white rounded-full shadow-lg shadow-red-600/40 hover:shadow-xl hover:scale-105 active:scale-95 transition-all duration-200 font-bold text-xs"
+          title="Ask Lakhi AI about your orders, invoices, or balance"
+        >
+          <div className="w-6 h-6 rounded-full bg-white/20 flex items-center justify-center">
+            <Sparkles className="w-3.5 h-3.5 animate-spin" style={{ animationDuration: '4s' }} />
+          </div>
+          <span>Ask Lakhi AI</span>
+          <span className="hidden sm:inline-block text-[10px] bg-white/20 px-2 py-0.5 rounded-full font-mono">
+            Copilot
+          </span>
+        </button>
+      </div>
+
+      {/* In-App Notifications Center Modal */}
+      <CustomerNotificationsModal
+        isOpen={isNotificationsOpen}
+        onClose={() => setIsNotificationsOpen(false)}
+        notifications={customerNotifications}
+        onMarkAsRead={handleMarkNotifAsRead}
+        onMarkAllAsRead={handleMarkAllNotifsAsRead}
+        onNavigateToTab={(tab) => {
+          setActiveTab(tab);
+          setIsNotificationsOpen(false);
+        }}
+      />
+
+      {/* Customer AI Assistant Modal */}
+      <CustomerAiAssistantModal
+        isOpen={isAiAssistantOpen}
+        onClose={() => setIsAiAssistantOpen(false)}
+        customer={activeCustomer}
+        invoices={customerInvoices}
+        shipments={customerShipments}
+        quotations={customerQuotes}
+        onNavigateTab={(tab) => {
+          setActiveTab(tab);
+          setIsAiAssistantOpen(false);
+        }}
+      />
     </div>
   );
 };

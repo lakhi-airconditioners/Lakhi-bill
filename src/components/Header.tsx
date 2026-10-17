@@ -50,10 +50,10 @@ export const Header: React.FC<HeaderProps> = ({
           {/* Brand & Lakhi Airconditioners Logo (Responsive: icon badge on mobile, full logo on tablet/desktop) */}
           <div className="flex items-center gap-1.5 shrink-0">
             <LakhiLogo size="responsive" variant="auto" themeInvert={theme === 'dark'} />
-            {isAdmin && onOpenBrandModal && (
+            {onOpenBrandModal && (
               <button
                 onClick={onOpenBrandModal}
-                title="Change Brand Logos"
+                title="Change Brand Logos (1x1 App Logo, Main Logo, and Lakhi Wordmark)"
                 className="p-1 sm:p-1.5 text-slate-400 hover:text-red-600 dark:hover:text-red-400 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors flex items-center gap-1 text-[11px] font-bold"
               >
                 <Palette className="w-3.5 h-3.5" />

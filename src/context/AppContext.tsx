@@ -34,6 +34,16 @@ import {
   PaymentMode,
 } from '../types';
 import { generateUniqueId, generateClaimCode } from '../utils/idGenerator';
+import {
+  findCustomerByCodeOrPhone,
+  extractRawPhone,
+  generatePhoneVariants,
+} from '../utils/phoneMatcher';
+import {
+  saveCustomerSessionIfInstalled,
+  getStoredCustomerSessionIfInstalled,
+  clearCustomerSession,
+} from '../utils/pwaSessionHelper';
 
 interface AppContextType {
   // Theme Mode
@@ -64,6 +74,7 @@ interface AppContextType {
   activeCustomer: Customer | null;
   loginCustomerById: (id: string, pin: string) => Promise<{ success: boolean; message: string }>;
   loginCustomerByPhone: (phone: string, pin: string) => Promise<{ success: boolean; message: string; customer?: Customer }>;
+  loginCustomerByCodeOrPhone: (input: string, pin: string) => Promise<{ success: boolean; message: string; customer?: Customer }>;
   findCustomerByPhone: (phone: string) => Promise<Customer | null>;
   logoutCustomer: () => void;
   linkCustomerAccount: (customerId: string, email: string) => Promise<void>;
@@ -89,6 +100,12 @@ interface AppContextType {
   // Mutations
   addCustomer: (data: Partial<Customer>, customCode?: string) => Promise<string>;
   updateCustomer: (id: string, data: Partial<Customer>) => Promise<void>;
+  deleteCustomer: (id: string) => Promise<void>;
+  deleteShipment: (id: string) => Promise<void>;
+  deleteTransaction: (id: string) => Promise<void>;
+  updateAnyDocument: (collectionName: string, id: string, data: Record<string, any>) => Promise<void>;
+  deleteAnyDocument: (collectionName: string, id: string) => Promise<void>;
+  createAnyDocument: (collectionName: string, data: Record<string, any>, customId?: string) => Promise<string>;
 
   addQuotation: (data: {
     customerId: string;
@@ -112,6 +129,7 @@ interface AppContextType {
   }, customCode?: string) => Promise<string>;
   updateQuotationStatus: (id: string, status: 'RECORDED' | 'SENT') => Promise<void>;
   updateQuotation: (id: string, data: Partial<Quotation>) => Promise<void>;
+  deleteQuotation: (id: string) => Promise<void>;
 
   addInvoice: (data: {
     customerId: string;
@@ -142,6 +160,7 @@ interface AppContextType {
     subtractStockItemIds?: string[]; // Optional stock to subtract/mark as SOLD
   }, customCode?: string) => Promise<string>;
   updateInvoice: (id: string, data: Partial<Invoice>) => Promise<void>;
+  deleteInvoice: (id: string) => Promise<void>;
 
   recordPaymentForInvoice: (
     invoiceId: string,
@@ -322,6 +341,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return () => unsubscribe();
   }, []);
 
+  // Auto-restore customer session indefinitely if running as an installed web app (PWA)
+  useEffect(() => {
+    const storedCustId = getStoredCustomerSessionIfInstalled();
+    if (storedCustId && !activeCustomer) {
+      getDoc(doc(db, 'customers', storedCustId))
+        .then((snap) => {
+          if (snap.exists()) {
+            setActiveCustomer({ ...snap.data(), id: snap.id } as Customer);
+          }
+        })
+        .catch((err) => {
+          console.warn('Could not restore installed web app customer session:', err);
+        });
+    }
+  }, []);
+
   // Listen to user's linked customer accounts in Firebase user_accounts/{uid}
   useEffect(() => {
     if (!currentUser) {
@@ -378,6 +413,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     );
     return () => unsubAdmins();
   }, []);
+
+  // Dynamically sync 1x1 app logo with browser tab favicon
+  useEffect(() => {
+    if (typeof document === 'undefined') return;
+    if (brandLogos.logo1x1) {
+      let link: HTMLLinkElement | null = document.querySelector("link[rel*='icon']");
+      if (!link) {
+        link = document.createElement('link');
+        link.rel = 'icon';
+        document.head.appendChild(link);
+      }
+      link.href = brandLogos.logo1x1;
+    }
+  }, [brandLogos.logo1x1]);
 
   // Determine if the current authenticated user is an authorized Admin
   const isAdmin = useMemo(() => {
@@ -548,6 +597,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
 
       setActiveCustomer(data);
+      saveCustomerSessionIfInstalled(data.id);
       return { success: true, message: 'Login successful' };
     } catch (err) {
       handleFirestoreError(err, OperationType.GET, `customers/${formattedId}`, false);
@@ -556,12 +606,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const findCustomerByPhone = async (phone: string): Promise<Customer | null> => {
-    const clean = phone.replace(/\D/g, '');
-    if (!clean) return null;
+    const raw = extractRawPhone(phone);
+    if (!raw) return null;
     try {
-      const match = customers.find((c) => c.phone.replace(/\D/g, '') === clean);
-      if (match) return match;
-      const q = query(collection(db, 'customers'), where('phone', '==', phone.trim()));
+      // 1. In-memory check against customers list
+      const inMemMatch = findCustomerByCodeOrPhone(phone, customers);
+      if (inMemMatch.customer) return inMemMatch.customer;
+
+      // 2. Query Firestore with all candidate phone variants (+91..., 0..., raw, 91...)
+      const variants = generatePhoneVariants(raw);
+      const q = query(collection(db, 'customers'), where('phone', 'in', variants.slice(0, 10)));
       const snap = await getDocs(q);
       if (!snap.empty) {
         const d = snap.docs[0];
@@ -588,11 +642,82 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     setActiveCustomer(found);
+    saveCustomerSessionIfInstalled(found.id);
     return { success: true, message: 'Login successful', customer: found };
+  };
+
+  /**
+   * Smart Universal Customer Login:
+   * Auto-detects whether the user entered a phone number (+91..., 91..., 0..., or raw)
+   * or a Customer ID / Code, simultaneously testing all permutations.
+   */
+  const loginCustomerByCodeOrPhone = async (
+    input: string,
+    pin: string
+  ): Promise<{ success: boolean; message: string; customer?: Customer }> => {
+    const cleanPin = pin.trim();
+    const trimmedInput = input.trim();
+
+    if (!trimmedInput) {
+      return { success: false, message: 'Please enter your Customer ID or Phone Number.' };
+    }
+    if (cleanPin.length !== 4) {
+      return { success: false, message: 'Please enter your 4-digit PIN.' };
+    }
+
+    // Step A: Fast in-memory bidirectional match
+    const match = findCustomerByCodeOrPhone(trimmedInput, customers);
+    let resolvedCustomer: Customer | null = match.customer;
+
+    // Step B: Direct Firestore lookup by Customer ID
+    if (!resolvedCustomer) {
+      try {
+        const idSnap = await getDoc(doc(db, 'customers', trimmedInput.toUpperCase()));
+        if (idSnap.exists()) {
+          resolvedCustomer = { ...idSnap.data(), id: idSnap.id } as Customer;
+        }
+      } catch (err) {
+        console.warn('Direct ID lookup fallback error', err);
+      }
+    }
+
+    // Step C: Firestore lookup across candidate phone permutations (+91..., 91..., 0..., raw)
+    if (!resolvedCustomer) {
+      const raw = extractRawPhone(trimmedInput);
+      if (raw && raw.length >= 7) {
+        const variants = generatePhoneVariants(raw);
+        try {
+          const q = query(collection(db, 'customers'), where('phone', 'in', variants.slice(0, 10)));
+          const snap = await getDocs(q);
+          if (!snap.empty) {
+            const d = snap.docs[0];
+            resolvedCustomer = { ...d.data(), id: d.id } as Customer;
+          }
+        } catch (err) {
+          console.warn('Phone variants query error', err);
+        }
+      }
+    }
+
+    if (!resolvedCustomer) {
+      return {
+        success: false,
+        message: 'No registered customer account found. Check your Customer ID or Phone number, or generate a 72-Hour Claim.',
+      };
+    }
+
+    if (resolvedCustomer.accessPin !== cleanPin) {
+      return { success: false, message: 'Invalid 4-digit PIN for this account.' };
+    }
+
+    setActiveCustomer(resolvedCustomer);
+    saveCustomerSessionIfInstalled(resolvedCustomer.id);
+    return { success: true, message: 'Login successful', customer: resolvedCustomer };
   };
 
   const logoutCustomer = () => {
     setActiveCustomer(null);
+    clearCustomerSession();
   };
 
   // Change Customer PIN (Used by both Customer Portal & Staff Operations)
@@ -748,8 +873,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         ...data,
         updatedAt: new Date().toISOString(),
       });
+      if (activeCustomer && activeCustomer.id === id) {
+        setActiveCustomer((prev) => (prev ? { ...prev, ...data, updatedAt: new Date().toISOString() } : prev));
+      }
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, `customers/${id}`);
+      throw err;
+    }
+  };
+
+  const deleteCustomer = async (id: string) => {
+    try {
+      await deleteDoc(doc(db, 'customers', id));
+      if (activeCustomer && activeCustomer.id === id) {
+        logoutCustomer();
+      }
+    } catch (err) {
+      handleFirestoreError(err, OperationType.DELETE, `customers/${id}`);
+      throw err;
     }
   };
 
@@ -835,6 +976,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, `quotations/${id}`);
+    }
+  };
+
+  const deleteQuotation = async (id: string) => {
+    try {
+      await deleteDoc(doc(db, 'quotations', id));
+    } catch (err) {
+      handleFirestoreError(err, OperationType.DELETE, `quotations/${id}`);
+      throw err;
     }
   };
 
@@ -948,6 +1098,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, `invoices/${id}`);
+    }
+  };
+
+  const deleteInvoice = async (id: string) => {
+    try {
+      await deleteDoc(doc(db, 'invoices', id));
+    } catch (err) {
+      handleFirestoreError(err, OperationType.DELETE, `invoices/${id}`);
+      throw err;
     }
   };
 
@@ -1328,6 +1487,61 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, `shipments/${id}`);
+      throw err;
+    }
+  };
+
+  const deleteShipment = async (id: string) => {
+    try {
+      await deleteDoc(doc(db, 'shipments', id));
+    } catch (err) {
+      handleFirestoreError(err, OperationType.DELETE, `shipments/${id}`);
+      throw err;
+    }
+  };
+
+  const deleteTransaction = async (id: string) => {
+    try {
+      await deleteDoc(doc(db, 'transactions', id));
+    } catch (err) {
+      handleFirestoreError(err, OperationType.DELETE, `transactions/${id}`);
+      throw err;
+    }
+  };
+
+  const updateAnyDocument = async (collectionName: string, id: string, data: Record<string, any>) => {
+    try {
+      await updateDoc(doc(db, collectionName, id), {
+        ...data,
+        updatedAt: new Date().toISOString(),
+      });
+    } catch (err) {
+      handleFirestoreError(err, OperationType.UPDATE, `${collectionName}/${id}`);
+      throw err;
+    }
+  };
+
+  const deleteAnyDocument = async (collectionName: string, id: string) => {
+    try {
+      await deleteDoc(doc(db, collectionName, id));
+    } catch (err) {
+      handleFirestoreError(err, OperationType.DELETE, `${collectionName}/${id}`);
+      throw err;
+    }
+  };
+
+  const createAnyDocument = async (collectionName: string, data: Record<string, any>, customId?: string) => {
+    try {
+      const docId = customId && customId.trim() ? customId.trim() : `${collectionName.slice(0, 3).toUpperCase()}-${Date.now()}`;
+      await setDoc(doc(db, collectionName, docId), {
+        ...data,
+        id: docId,
+        createdAt: new Date().toISOString(),
+      });
+      return docId;
+    } catch (err) {
+      handleFirestoreError(err, OperationType.WRITE, `${collectionName}`);
+      throw err;
     }
   };
 
@@ -1541,6 +1755,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         activeCustomer,
         loginCustomerById,
         loginCustomerByPhone,
+        loginCustomerByCodeOrPhone,
         findCustomerByPhone,
         logoutCustomer,
         linkCustomerAccount,
@@ -1560,12 +1775,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         isFirebaseConnected,
         addCustomer,
         updateCustomer,
+        deleteCustomer,
         addQuotation,
         updateQuotationStatus,
         updateQuotation,
+        deleteQuotation,
         addInvoice,
         updateInvoice,
+        deleteInvoice,
         recordPaymentForInvoice,
+        deleteTransaction,
         addInventoryItem,
         updateInventoryItem,
         markInventorySold,
@@ -1577,6 +1796,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         updateShipmentStatus,
         linkInvoicesToShipment,
         updateShipment,
+        deleteShipment,
+        updateAnyDocument,
+        deleteAnyDocument,
+        createAnyDocument,
         submitVerificationClaim,
         approveClaim,
         rejectClaim,
