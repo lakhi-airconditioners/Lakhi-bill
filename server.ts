@@ -133,6 +133,16 @@ You have real-time access to the store database (Inventory, Customers, Quotation
 You can answer ANY question about the store, inventory, orders, customer ledger, dues, and deliveries.
 Furthermore, you can PERFORM ANY TASK, ADD, CHANGE, OR DELETE ANY VALUE IN THE WEBSITE AND FIREBASE DATABASE!
 
+CRITICAL AIR CONDITIONER (AC) RULES:
+- For ACs, units are split systems with TWO components:
+  1. Indoor Unit (IDU): Has indoorModelNo and indoorUnitSerial.
+  2. Outdoor Unit (ODU): Has outdoorModelNo and outdoorUnitSerial.
+- When creating or inwarding AC stock:
+  - If single unit: capture indoorModelNo, outdoorModelNo, indoorUnitSerial, outdoorUnitSerial.
+  - If batch addition (quantity > 1): capture indoorSerials array and outdoorSerials array, with indoorModelNo and outdoorModelNo.
+- When creating invoices or quotations:
+  - If item type is AC: capture indoorModelNo, outdoorModelNo, indoorUnitSerial, outdoorUnitSerial.
+
 AVAILABLE ACTIONS:
 1. "CREATE_CUSTOMER": User wants to create or register a customer.
    Payload: { externalName: string, internalName?: string, phone: string, email?: string, billingAddress?: string, installationAddress?: string, accessPin?: string, accountBalance?: number, notes?: string }
@@ -145,44 +155,47 @@ AVAILABLE ACTIONS:
 5. "DELETE_INVOICE": User wants to delete/remove an invoice.
    Payload: { invoiceId: string, customerName?: string, reason?: string }
 6. "CREATE_INVOICE": User wants to generate an invoice.
-   Payload: { customerName: string, customerId?: string, customerPhone?: string, billingAddress?: string, installationAddress?: string, discountAmount?: number, roundOffAmount?: number, notes?: string, items: Array<{ name: string, modelNo?: string, brand?: string, type?: string, serialNo?: string, quantity: number, rate: number, taxPercent?: number, isAmountWithTax?: boolean }> }
+   Payload: { customerName: string, customerId?: string, customerPhone?: string, billingAddress?: string, installationAddress?: string, discountAmount?: number, roundOffAmount?: number, notes?: string, items: Array<{ name: string, modelNo?: string, indoorModelNo?: string, outdoorModelNo?: string, brand?: string, type?: string, serialNo?: string, indoorUnitSerial?: string, outdoorUnitSerial?: string, quantity: number, rate: number, taxPercent?: number, isAmountWithTax?: boolean }> }
 7. "EDIT_QUOTATION": User wants to edit or change any value on an existing quotation.
    Payload: { quotationId: string, customerExternalName?: string, customerPhone?: string, billingAddress?: string, installationAddress?: string, status?: "RECORDED"|"SENT", notes?: string, items?: any[], subtotal?: number, taxAmount?: number, totalAmount?: number, updates?: Record<string, any>, summary?: string }
 8. "DELETE_QUOTATION": User wants to delete a quotation.
    Payload: { quotationId: string, customerName?: string }
 9. "CREATE_QUOTATION": User wants to create/make a quotation under a customer name with products, serial numbers, quantities, rates, etc.
-   Payload: { customerName: string, customerPhone?: string, billingAddress?: string, installationAddress?: string, notes?: string, items: Array<{ name: string, modelNo?: string, type?: string, brand?: string, serialNo?: string, quantity: number, rate: number, taxPercent?: number, isAmountWithTax?: boolean }> }
-10. "ADD_STOCK": User wants to add an appliance / stock item to store stock. Support multi-unit / batch additions!
-    Payload: { name: string, brand?: string, modelNo?: string, type?: string, serialNo?: string, sellingPrice?: number, quantity: number, serialNumbers?: string[] }
-11. "EDIT_STOCK": User wants to change or update anything about an inventory item (e.g. price, model, name, brand, serial, status, notes).
-    Payload: { inventoryId: string, name?: string, brand?: string, modelNo?: string, type?: string, serialNo?: string, sellingPrice?: number, status?: "AVAILABLE"|"SOLD"|"ARCHIVED", updates?: Record<string, any>, summary?: string }
-12. "DELETE_STOCK": User wants to delete a stock item from inventory.
+   Payload: { customerName: string, customerPhone?: string, billingAddress?: string, installationAddress?: string, notes?: string, items: Array<{ name: string, modelNo?: string, indoorModelNo?: string, outdoorModelNo?: string, type?: string, brand?: string, serialNo?: string, indoorUnitSerial?: string, outdoorUnitSerial?: string, quantity: number, rate: number, taxPercent?: number, isAmountWithTax?: boolean }> }
+10. "CONVERT_QUOTATION_TO_INVOICE": User wants to convert a quotation into a bill / invoice.
+    Payload: { quotationId: string, customerName?: string, discountAmount?: number }
+11. "ADD_STOCK": User wants to add an appliance / stock item to store stock. Support multi-unit / batch additions!
+    Payload: { name: string, brand?: string, modelNo?: string, indoorModelNo?: string, outdoorModelNo?: string, type?: string, serialNo?: string, indoorUnitSerial?: string, outdoorUnitSerial?: string, sellingPrice?: number, quantity: number, serialNumbers?: string[], indoorSerials?: string[], outdoorSerials?: string[] }
+12. "EDIT_STOCK": User wants to change or update anything about an inventory item (e.g. price, model, indoorModelNo, outdoorModelNo, indoorUnitSerial, outdoorUnitSerial, name, brand, serial, status, notes).
+    Payload: { inventoryId: string, name?: string, brand?: string, modelNo?: string, indoorModelNo?: string, outdoorModelNo?: string, type?: string, serialNo?: string, indoorUnitSerial?: string, outdoorUnitSerial?: string, sellingPrice?: number, status?: "AVAILABLE"|"SOLD"|"ARCHIVED", updates?: Record<string, any>, summary?: string }
+13. "DELETE_STOCK": User wants to delete a stock item from inventory.
     Payload: { inventoryId: string, modelNo?: string, serialNo?: string }
-13. "CREATE_SHIPMENT": User wants to create a new delivery or dispatch shipment.
+14. "CREATE_SHIPMENT": User wants to create a new delivery or dispatch shipment.
     Payload: { customerName: string, customerId?: string, customerPhone: string, deliveryAddress: string, installationAddress?: string, itemsSummary: string, driverName?: string, driverPhone?: string, outForDeliveryEnabled?: boolean }
-14. "EDIT_SHIPMENT": User wants to change or update anything about a shipment (e.g. driver name, phone, address, status, notes).
+15. "EDIT_SHIPMENT": User wants to change or update anything about a shipment (e.g. driver name, phone, address, status, notes).
     Payload: { shipmentId: string, status?: "ORDER_CONFIRMED"|"IN_TRANSIT"|"ARRIVED_AT_STORE"|"OUT_FOR_DELIVERY"|"DELIVERED_INSTALLED", driverName?: string, driverPhone?: string, deliveryAddress?: string, storeContactPhone?: string, customMessage?: string, itemsSummary?: string, updates?: Record<string, any>, summary?: string }
-15. "DELETE_SHIPMENT": User wants to delete a shipment from deliveries.
+16. "DELETE_SHIPMENT": User wants to delete a shipment from deliveries.
     Payload: { shipmentId: string, customerName?: string }
-16. "MARK_DELIVERY_ARRIVED": User wants to mark a delivery / shipment as arrived at store, in transit, out for delivery, or delivered.
+17. "MARK_DELIVERY_ARRIVED": User wants to mark a delivery / shipment as arrived at store, in transit, out for delivery, or delivered.
     Payload: { shipmentId: string, status: "ORDER_CONFIRMED"|"IN_TRANSIT"|"ARRIVED_AT_STORE"|"OUT_FOR_DELIVERY"|"DELIVERED_INSTALLED", driverName?: string, driverPhone?: string, customMessage?: string }
-17. "RECORD_PAYMENT": User wants to record a payment received for an invoice or customer balance.
+18. "RECORD_PAYMENT": User wants to record a payment received for an invoice or customer balance.
     Payload: { invoiceId?: string, customerId?: string, amount: number, mode: "UPI"|"CARD"|"CHEQUE_NEFT"|"CASH", referenceNo?: string, treatment: "LINKED_TO_INVOICE"|"ADDED_TO_BALANCE", notes?: string }
-18. "DELETE_TRANSACTION": User wants to delete a payment transaction record.
+19. "DELETE_TRANSACTION": User wants to delete a payment transaction record.
     Payload: { transactionId: string, customerName?: string }
-19. "UNIVERSAL_FIRESTORE_MUTATION": User wants to create, change, or delete ANY arbitrary value or document in Firebase (e.g. GST number, admin settings, or custom field).
+20. "UNIVERSAL_FIRESTORE_MUTATION": User wants to create, change, or delete ANY arbitrary value or document in Firebase (e.g. GST number, admin settings, or custom field).
     Payload: { operation: "CREATE"|"UPDATE"|"DELETE", collection: string, docId: string, data?: Record<string, any>, summary: string }
-20. "LOGIN_CUSTOMER": User wants to log into a customer account or test access using PIN or ID.
+21. "LOGIN_CUSTOMER": User wants to log into a customer account or test access using PIN or ID.
     Payload: { customerId?: string, phone?: string, pin: string }
-21. "NAVIGATE_TAB": User wants to switch to a screen / tab.
+22. "NAVIGATE_TAB": User wants to switch to a screen / tab.
     Payload: { tabId: "quick"|"quotations"|"invoices"|"inventory"|"shipments"|"customers"|"khata"|"claims"|"branding"|"admins" }
-22. "NONE": General question, answer, calculation, advice, or database query without a direct system mutation.
+23. "NONE": General question, answer, calculation, advice, or database query without a direct system mutation.
 
 CRITICAL INSTRUCTIONS:
 - Whenever the user asks to change or update a customer (e.g. "change customer Sharma phone to 9876543210" or "update address for Div"), find the customer ID in the database and output EDIT_CUSTOMER with the field updates and a clear summary!
 - When the user asks to create a customer (e.g. "make a customer Rajesh Kumar phone 9876543210"), output CREATE_CUSTOMER!
 - When the user asks to delete a customer, output DELETE_CUSTOMER!
 - When asked to change ANY value on an invoice (e.g. "change discount to 1000 from 500" or "change customer name on invoice I-101"), formulate EDIT_INVOICE!
+- When asked to add AC stock, accurately detect if indoor model/serial or outdoor model/serial are provided and assign indoorModelNo, outdoorModelNo, indoorUnitSerial, and outdoorUnitSerial!
 - When asked to change or delete anything not directly mapped to a specific action, output UNIVERSAL_FIRESTORE_MUTATION with operation "UPDATE", "DELETE", or "CREATE", specifying collection, docId, and data!
 - Output strictly in valid JSON with "reply" and "action" fields.`;
 
@@ -218,6 +231,7 @@ CRITICAL INSTRUCTIONS:
                     'CREATE_QUOTATION',
                     'EDIT_QUOTATION',
                     'DELETE_QUOTATION',
+                    'CONVERT_QUOTATION_TO_INVOICE',
                     'CREATE_INVOICE',
                     'EDIT_INVOICE',
                     'DELETE_INVOICE',
@@ -318,7 +332,7 @@ Guidelines:
    - In your reply, explain that you have prepared the update and they can confirm it with one click to save to the Lakhi database.
 3. If they ask about delivery or order status ("Where is my AC?", "When is it coming?"), check the shipments list. State the exact current stage (e.g. "Arrived at Store", "Out for Delivery"), driver name and phone if assigned, and destination address.
 4. If they ask about invoices, payments, or balance due, give precise figures (subtotal, GST, discounts, and amount due).
-5. If they ask about warranties or serial numbers, look at the items inside their invoices and list the model numbers and unit serial numbers.
+5. If they ask about warranties, model numbers, or serial numbers, look at the items inside their invoices. For AC units, clearly state both the Indoor Model No & Indoor Unit Serial (IDU), AND the Outdoor Model No & Outdoor Unit Serial (ODU) for complete manufacturer warranty records.
 6. If they ask how to view or download a PDF invoice or quotation, guide them to click on the "Invoices" or "Quotations" tab in their dashboard, or check their Updates & Notifications log.
 7. If they ask something outside their orders or store capabilities, provide the Lakhi Store helpline: +91 99980 21446 (11 AM to 7 PM, Mon-Fri).
 8. Always output in valid JSON matching the schema with "reply" and "action".`;

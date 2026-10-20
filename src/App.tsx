@@ -12,10 +12,10 @@ import { AdminUidManager } from './components/staff/AdminUidManager';
 import { DuesKhataManager } from './components/staff/DuesKhataManager';
 import { CustomerPortal } from './components/customer/CustomerPortal';
 import { OfflineIndicator } from './components/common/OfflineIndicator';
-import { PWAInstallButton } from './components/common/PWAInstallButton';
 import { Quotation, Invoice } from './types';
 import { BrandLogoManager } from './components/staff/BrandLogoManager';
 import { BrandLogoModal } from './components/common/BrandLogoModal';
+import { TallyPrimeManager, TallyCategory } from './components/staff/TallyPrimeManager';
 import {
   Zap,
   FileCheck2,
@@ -28,6 +28,7 @@ import {
   Scale,
   Sparkles,
   Palette,
+  FileSpreadsheet,
 } from 'lucide-react';
 import { LakhiLogo } from './components/common/LakhiLogo';
 import { generateInvoicePdf, generateQuotationPdf } from './utils/pdfGenerator';
@@ -98,6 +99,19 @@ function MainApp() {
     }
   }, [invoices, quotations, gstNumber]);
 
+  // Tally Prime State
+  const [tallyInitialTab, setTallyInitialTab] = useState<'IMPORT' | 'EXPORT' | 'GUIDE'>('IMPORT');
+  const [tallyInitialCategory, setTallyInitialCategory] = useState<TallyCategory>('INVENTORY');
+
+  const handleOpenTally = (
+    tab: 'IMPORT' | 'EXPORT' | 'GUIDE' = 'IMPORT',
+    cat: TallyCategory = 'INVENTORY'
+  ) => {
+    setTallyInitialTab(tab);
+    setTallyInitialCategory(cat);
+    setActiveStaffTab('tally');
+  };
+
   const pendingClaimsCount = claims.filter((c) => c.status === 'PENDING').length;
 
   const handleConvertToInvoice = (quote: Quotation) => {
@@ -115,6 +129,7 @@ function MainApp() {
     { id: 'quotations', label: 'Quotes (Q...)', icon: FileCheck2 },
     { id: 'invoices', label: 'Billing & Invoices (I...)', icon: Receipt },
     { id: 'inventory', label: 'Store Stock', icon: Boxes },
+    { id: 'tally', label: '📊 Tally Prime (Import/Export)', icon: FileSpreadsheet },
     { id: 'shipments', label: 'Deliveries & Tracking (D...)', icon: Truck },
     { id: 'customers', label: 'Customers & Ledger (C/T...)', icon: Users },
     { id: 'khata', label: 'Who Owes Who (Dues & Khata)', icon: Scale },
@@ -129,15 +144,7 @@ function MainApp() {
   ];
 
   return (
-    <div
-      className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col font-sans transition-colors duration-200"
-      style={{
-        paddingTop: 'var(--sat)',
-        paddingRight: 'var(--sar)',
-        paddingBottom: 'var(--sab)',
-        paddingLeft: 'var(--sal)',
-      }}
-    >
+    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col font-sans transition-colors duration-200">
       <Header
         onOpenClaimsModal={() => setActiveStaffTab('claims')}
         onOpenAiAssistant={() => setIsAiDrawerOpen(true)}
@@ -182,6 +189,7 @@ function MainApp() {
               onShipInvoice={handleShipInvoice}
               onOpenAiAssistant={() => setIsAiDrawerOpen(true)}
               onOpenBarcodeScanner={() => setActiveStaffTab('inventory')}
+              onOpenTally={handleOpenTally}
             />
           )}
 
@@ -196,6 +204,7 @@ function MainApp() {
               initialStockItemToBill={stockItemToBill}
               onClearInitialStock={() => setStockItemToBill(null)}
               onOpenNewShipmentForInvoice={handleShipInvoice}
+              onOpenTally={handleOpenTally}
             />
           )}
 
@@ -205,6 +214,14 @@ function MainApp() {
                 setStockItemToBill(item);
                 setActiveStaffTab('invoices');
               }}
+              onOpenTally={handleOpenTally}
+            />
+          )}
+
+          {activeStaffTab === 'tally' && (
+            <TallyPrimeManager
+              initialTab={tallyInitialTab}
+              initialCategory={tallyInitialCategory}
             />
           )}
 
@@ -215,7 +232,9 @@ function MainApp() {
             />
           )}
 
-          {activeStaffTab === 'customers' && <CustomerLedger />}
+          {activeStaffTab === 'customers' && (
+            <CustomerLedger onOpenTally={handleOpenTally} />
+          )}
 
           {activeStaffTab === 'khata' && <DuesKhataManager />}
 
@@ -244,7 +263,6 @@ function MainApp() {
             </div>
           </div>
           <div className="flex items-center gap-3 sm:gap-4 text-[11px] font-mono flex-wrap">
-            <PWAInstallButton />
             <span>[Type] + [YYYYMMDD] + [4-Digit]</span>
             <span className="text-emerald-600 dark:text-emerald-400 font-semibold">● Cloud Firestore Online</span>
           </div>

@@ -34,6 +34,7 @@ import {
   Camera,
   CheckCircle2,
   Bot,
+  FileSpreadsheet,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { Customer, QuotationItem, InvoiceLineItem, Quotation, Invoice, Shipment, ShipmentStatus } from '../../types';
@@ -51,6 +52,7 @@ interface QuickModeProps {
   onShipInvoice?: (inv: Invoice) => void;
   onOpenAiAssistant?: () => void;
   onOpenBarcodeScanner?: () => void;
+  onOpenTally?: (tab?: 'IMPORT' | 'EXPORT' | 'GUIDE', category?: any) => void;
 }
 
 export const QuickMode: React.FC<QuickModeProps> = ({
@@ -59,6 +61,7 @@ export const QuickMode: React.FC<QuickModeProps> = ({
   onShipInvoice,
   onOpenAiAssistant,
   onOpenBarcodeScanner,
+  onOpenTally,
 }) => {
   const {
     customers,
@@ -695,6 +698,17 @@ export const QuickMode: React.FC<QuickModeProps> = ({
               >
                 <Camera className="w-3.5 h-3.5 text-amber-300" />
                 <span>📸 Scan Barcode</span>
+              </button>
+            )}
+            {onOpenTally && (
+              <button
+                type="button"
+                onClick={() => onOpenTally('IMPORT', 'INVENTORY')}
+                className="px-3 py-1.5 rounded-xl text-xs font-black whitespace-nowrap bg-emerald-600 hover:bg-emerald-500 text-white shadow-md flex items-center gap-1.5 transition-all hover:scale-102"
+                title="Tally Prime Data Import & Export"
+              >
+                <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-200" />
+                <span>📊 Tally Import</span>
               </button>
             )}
             <button

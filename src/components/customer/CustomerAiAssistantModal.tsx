@@ -18,6 +18,8 @@ import {
   Check,
   MapPin,
   AlertCircle,
+  Volume2,
+  VolumeX,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { Customer, Invoice, Shipment, Quotation } from '../../types';
@@ -67,6 +69,30 @@ export const CustomerAiAssistantModal: React.FC<CustomerAiAssistantModalProps> =
   const [isLoading, setIsLoading] = useState(false);
   const [isListening, setIsListening] = useState(false);
   const [speechSupported, setSpeechSupported] = useState(false);
+  const [isTtsEnabled, setIsTtsEnabled] = useState(false);
+
+  const speakText = (text: string) => {
+    if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
+    try {
+      window.speechSynthesis.cancel();
+      const clean = text
+        .replace(/[*#_`~>•]/g, '')
+        .replace(/\b([A-Z0-9]+-[A-Z0-9]+)\b/g, '$1')
+        .slice(0, 300);
+      const utterance = new SpeechSynthesisUtterance(clean);
+      utterance.lang = 'en-IN';
+      utterance.rate = 1.0;
+      window.speechSynthesis.speak(utterance);
+    } catch (e) {
+      console.warn('TTS error:', e);
+    }
+  };
+
+  const stopSpeaking = () => {
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+    }
+  };
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const recognitionRef = useRef<any>(null);
@@ -164,6 +190,7 @@ export const CustomerAiAssistantModal: React.FC<CustomerAiAssistantModalProps> =
               : undefined,
         };
         setMessages((prev) => [...prev, aiMsg]);
+        speakText(aiMsg.text);
       } else {
         throw new Error('Server request failed');
       }
@@ -184,6 +211,21 @@ export const CustomerAiAssistantModal: React.FC<CustomerAiAssistantModalProps> =
         const custInvoices = invoices.filter((i) => i.customerId === customer.id);
         const totalDue = custInvoices.reduce((sum, inv) => sum + (inv.amountDue || 0), 0);
         reply = `Your total pending balance across ${custInvoices.length} invoice(s) is ₹${totalDue.toLocaleString('en-IN')}.`;
+      } else if (lower.includes('serial') || lower.includes('warranty') || lower.includes('unit') || lower.includes('idu') || lower.includes('odu')) {
+        const custInvoices = invoices.filter((i) => i.customerId === customer.id);
+        const allItems = custInvoices.flatMap((inv) => inv.items || []);
+        if (allItems.length > 0) {
+          const itemLines = allItems.map((it) => {
+            const isAc = (it.type || '').toUpperCase() === 'AC';
+            if (isAc) {
+              return `• ${it.name} (${it.brand || 'Daikin'}): IDU Model: ${it.indoorModelNo || it.modelNo || '-'}, Indoor S/N: ${it.indoorUnitSerial || it.serialNo || '-'} | ODU Model: ${it.outdoorModelNo || '-'}, Outdoor S/N: ${it.outdoorUnitSerial || '-'}`;
+            }
+            return `• ${it.name} (${it.modelNo}): Serial No: ${it.serialNo || '-'}`;
+          }).join('\n');
+          reply = `Here are your registered appliances and warranty serial numbers:\n\n${itemLines}`;
+        } else {
+          reply = `No appliances are registered under your account yet. If you recently purchased equipment, please contact Lakhi store at +91 99980 21446.`;
+        }
       } else if (lower.includes('address') || lower.includes('phone') || lower.includes('name')) {
         reply = `I can update your contact and delivery records in our database. Please confirm the details below:`;
         fallbackAction = {
@@ -205,6 +247,7 @@ export const CustomerAiAssistantModal: React.FC<CustomerAiAssistantModalProps> =
           action: fallbackAction,
         },
       ]);
+      speakText(reply);
     } finally {
       setIsLoading(false);
     }
@@ -273,12 +316,32 @@ export const CustomerAiAssistantModal: React.FC<CustomerAiAssistantModalProps> =
               </p>
             </div>
           </div>
-          <button
-            onClick={onClose}
-            className="p-1.5 rounded-xl text-white/80 hover:text-white hover:bg-white/20 transition-colors"
-          >
-            <X className="w-5 h-5" />
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                if (isTtsEnabled) {
+                  stopSpeaking();
+                  setIsTtsEnabled(false);
+                } else {
+                  setIsTtsEnabled(true);
+                  speakText('Voice assistance enabled.');
+                }
+              }}
+              className={`p-1.5 rounded-xl transition-colors ${
+                isTtsEnabled ? 'bg-amber-400 text-slate-900 shadow-sm' : 'text-white/80 hover:text-white hover:bg-white/20'
+              }`}
+              title={isTtsEnabled ? 'Turn off Voice Readout' : 'Turn on Voice Readout'}
+            >
+              {isTtsEnabled ? <Volume2 className="w-5 h-5 animate-pulse" /> : <VolumeX className="w-5 h-5" />}
+            </button>
+            <button
+              onClick={onClose}
+              className="p-1.5 rounded-xl text-white/80 hover:text-white hover:bg-white/20 transition-colors"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
         </div>
 
         {/* Chat History */}

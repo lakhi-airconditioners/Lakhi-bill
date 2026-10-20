@@ -24,6 +24,7 @@ import {
   ChevronRight,
   LayoutGrid,
   List,
+  FileSpreadsheet,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { InventoryItem, StockStatus } from '../../types';
@@ -34,9 +35,10 @@ import { stripRandomSuffix, generateRandomCode } from '../../utils/idGenerator';
 
 interface InventoryGodownProps {
   onBillItem?: (item: InventoryItem) => void;
+  onOpenTally?: (tab?: 'IMPORT' | 'EXPORT' | 'GUIDE', category?: any) => void;
 }
 
-export const InventoryGodown: React.FC<InventoryGodownProps> = ({ onBillItem }) => {
+export const InventoryGodown: React.FC<InventoryGodownProps> = ({ onBillItem, onOpenTally }) => {
   const {
     inventory,
     shipments,
@@ -774,6 +776,16 @@ export const InventoryGodown: React.FC<InventoryGodownProps> = ({ onBillItem }) 
             <Camera className="w-4 h-4 text-red-500 animate-pulse" />
             <span>Scan QR / Label</span>
           </button>
+          {onOpenTally && (
+            <button
+              onClick={() => onOpenTally('IMPORT', 'INVENTORY')}
+              className="px-3.5 py-2.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-xs font-bold shadow-xs flex items-center gap-1.5 transition-all active:scale-98"
+              title="Import Stock Items & AC Models directly from Tally Prime XML or Excel"
+            >
+              <FileSpreadsheet className="w-4 h-4 text-emerald-200" />
+              <span>Import Tally Stock</span>
+            </button>
+          )}
           <button
             onClick={() => setIsAddOpen(true)}
             className="px-4 py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-xl text-xs font-bold shadow-sm shadow-red-600/30 flex items-center gap-1.5 transition-colors"

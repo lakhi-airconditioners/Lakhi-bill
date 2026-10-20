@@ -6,6 +6,8 @@ export interface Customer {
   externalName: string; // Official legal name shown on bills and portal
   phone: string;
   email?: string;
+  gstin?: string; // GSTIN Identification Number
+  notes?: string; // Internal dealer / import notes
   billingAddress: string; // Billing address(es)
   installationAddress: string; // Installation address(es)
   accessPin: string; // 4-digit PIN for quick customer portal access
@@ -191,6 +193,9 @@ export interface Shipment {
   outForDeliveryEnabled: boolean;
   driverName?: string;
   driverPhone?: string;
+  vehicleOrDriver?: string;
+  deliveryPersonPhone?: string;
+  ewayBillNo?: string;
   storeContactPhone?: string; // Lakhi Store helpline / contact info
   liveRouteLink?: string;
   trackingUpdates: TrackingUpdate[]; // Updates that can be added

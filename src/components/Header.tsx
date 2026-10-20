@@ -14,7 +14,6 @@ import {
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { LakhiLogo } from './common/LakhiLogo';
-import { PWAInstallButton } from './common/PWAInstallButton';
 
 interface HeaderProps {
   onOpenClaimsModal?: () => void;
@@ -123,9 +122,6 @@ export const Header: React.FC<HeaderProps> = ({
                 <span className="text-[10px] bg-white/20 px-1 py-0.2 rounded font-mono hidden md:inline">Admin</span>
               </button>
             )}
-
-            {/* Download / Install as Web App (Chrome, Edge, Safari, Android) */}
-            <PWAInstallButton />
 
             {/* Theme Toggle (Light / Dark Mode) */}
             <button

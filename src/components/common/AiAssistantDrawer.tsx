@@ -25,9 +25,11 @@ import {
   Copy,
   Lock,
   Layers,
+  Volume2,
+  VolumeX,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
-import { Customer, Quotation, Invoice, InventoryItem, Shipment } from '../../types';
+import { Customer, Quotation, Invoice, InventoryItem, Shipment, InvoiceLineItem } from '../../types';
 import { generateQuotationPdf, generateInvoicePdf } from '../../utils/pdfGenerator';
 import { resolvePdfLinks } from '../../utils/cloudPdfHelper';
 
@@ -51,6 +53,7 @@ interface ChatMessage {
       | 'CREATE_QUOTATION'
       | 'EDIT_QUOTATION'
       | 'DELETE_QUOTATION'
+      | 'CONVERT_QUOTATION_TO_INVOICE'
       | 'CREATE_INVOICE'
       | 'EDIT_INVOICE'
       | 'DELETE_INVOICE'
@@ -188,35 +191,60 @@ export const AiAssistantDrawer: React.FC<AiAssistantDrawerProps> = ({
     }
   };
 
+  const [isTtsEnabled, setIsTtsEnabled] = useState(false);
+
+  const speakText = (text: string) => {
+    if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
+    try {
+      window.speechSynthesis.cancel();
+      const clean = text
+        .replace(/[*#_`~>]/g, '')
+        .replace(/\b([A-Z0-9]+-[A-Z0-9]+)\b/g, '$1')
+        .slice(0, 320);
+      const utterance = new SpeechSynthesisUtterance(clean);
+      utterance.lang = 'en-IN';
+      utterance.rate = 1.0;
+      window.speechSynthesis.speak(utterance);
+    } catch (e) {
+      console.warn('TTS error:', e);
+    }
+  };
+
+  const stopSpeaking = () => {
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+    }
+  };
+
   const quickChips = [
     {
-      label: '👤 Make Customer',
-      prompt: 'Create a new customer named Rajesh Patel with phone number +91 98250 12345, address "12 Sunrise Park, Drive-in Road, Ahmedabad", and PIN 2026.',
+      label: '📊 Stock & Valuation Report',
+      prompt: 'Give me a summary of total stock in store, breakdown by AC and brand, and total inventory value.',
     },
     {
-      label: '✏️ Change Customer Details',
-      prompt: 'Update customer details: change phone number to +91 99980 21446 and address to "Shop 4, Ground Floor, Central Mall".',
+      label: '💳 Customer Pending Dues',
+      prompt: 'Which customers currently have pending dues or unpaid invoices? List them with balances.',
+    },
+    {
+      label: '❄️ Inward AC (IDU + ODU)',
+      prompt: 'Add 1 unit of Daikin 1.5 Ton AC model FTKF50TV with IDU Model FTKF50TV-IDU (SN: DKN-IDU-901) and ODU Model RKF50TV-ODU (SN: DKN-ODU-901) at ₹48,000 to store stock.',
+    },
+    {
+      label: '⚡ Make Quotation (with IDU/ODU)',
+      prompt:
+        'Create quotation for Gautam Sharma (phone 9876543210): 2 units Daikin 1.5 Ton AC with indoor serials DKN-IDU-101 and DKN-IDU-102 at rate 46500 each, 18% GST included.',
+    },
+    {
+      label: '📄 Convert Quote to Invoice',
+      prompt: 'Convert the latest quotation to an official tax invoice.',
     },
     {
       label: '💰 Change Invoice Discount',
       prompt: 'Change discount on invoice to ₹1,000 and update payment status to PAID.',
     },
     {
-      label: '⚡ Make Quotation (with serials)',
-      prompt:
-        'Create quotation for Gautam Sharma (phone 9876543210): 2 units Daikin 1.5 Ton 5-Star Split AC with serial numbers DKN-101 and DKN-102 at rate 46500 each, and 1 Voltas 1 Ton AC at 32000. 18% GST included.',
-    },
-    {
-      label: '📦 Inward 3 AC Units to Stock',
-      prompt: 'Add 3 units of Daikin 1.5 Ton 5-Star Split AC model FTKF50TV to store stock at ₹46,500 each with serials DKN-FTKF-101, DKN-FTKF-102, DKN-FTKF-103.',
-    },
-    {
       label: '🚚 Mark Delivery in Store',
       prompt: 'Mark the customer delivery shipment as Arrived at Store.',
-    },
-    {
-      label: '🧾 Check Customer Dues',
-      prompt: 'Which customers currently have pending dues or unpaid invoices?',
     },
   ];
 
@@ -249,12 +277,17 @@ export const AiAssistantDrawer: React.FC<AiAssistantDrawerProps> = ({
           phone: c.phone,
           balance: c.accountBalance,
         })),
-        inventory: inventory.map((i) => ({
+        inventory: inventory.slice(0, 40).map((i) => ({
           id: i.id,
           name: i.name,
           brand: i.brand,
           model: i.modelNo,
+          indoorModel: i.indoorModelNo,
+          outdoorModel: i.outdoorModelNo,
           serial: i.serialNo,
+          indoorSerial: i.indoorUnitSerial,
+          outdoorSerial: i.outdoorUnitSerial,
+          type: i.type,
           price: i.sellingPrice,
           status: i.status,
         })),
@@ -271,7 +304,15 @@ export const AiAssistantDrawer: React.FC<AiAssistantDrawerProps> = ({
           total: inv.totalAmount,
           due: inv.amountDue,
           status: inv.paymentStatus,
-          items: inv.items.map((it) => ({ name: it.name, serial: it.serialNo })),
+          items: inv.items.map((it) => ({
+            name: it.name,
+            model: it.modelNo,
+            indoorModel: it.indoorModelNo,
+            outdoorModel: it.outdoorModelNo,
+            serial: it.serialNo,
+            indoorSerial: it.indoorUnitSerial,
+            outdoorSerial: it.outdoorUnitSerial,
+          })),
         })),
         shipments: shipments.slice(0, 15).map((s) => ({
           id: s.id,
@@ -304,6 +345,7 @@ export const AiAssistantDrawer: React.FC<AiAssistantDrawerProps> = ({
           action: actionData,
         };
         setMessages((prev) => [...prev, aiMsg]);
+        speakText(aiMsg.text);
 
         if (data.action && data.action.type === 'NAVIGATE_TAB' && data.action.payload?.tabId) {
           onNavigateTab(data.action.payload.tabId);
@@ -473,14 +515,16 @@ export const AiAssistantDrawer: React.FC<AiAssistantDrawerProps> = ({
         const tax = Number(it.taxPercent) || 18;
         const isTax = it.isAmountWithTax !== false;
         const lineTotal = isTax ? qty * rate : qty * rate * (1 + tax / 100);
+        const isAc = (it.type || 'AC').toUpperCase() === 'AC';
 
         return {
           id: `item-${Date.now()}-${idx}`,
           name: it.name || 'Split Air Conditioner',
           modelNo: it.modelNo || 'STANDARD-MODEL',
+          indoorModelNo: it.indoorModelNo || (isAc && it.modelNo ? `${it.modelNo}-IDU` : undefined),
+          outdoorModelNo: it.outdoorModelNo || (isAc && it.modelNo ? `${it.modelNo}-ODU` : undefined),
           type: it.type || 'AC',
           brand: it.brand || 'Daikin',
-          serialNo: it.serialNo || '',
           quantity: qty,
           rate,
           taxPercent: tax,
@@ -529,6 +573,86 @@ export const AiAssistantDrawer: React.FC<AiAssistantDrawerProps> = ({
     }
   };
 
+  const handleConfirmConvertQuotation = async (msgId: string, payload: any) => {
+    try {
+      const quote = quotations.find(
+        (q) =>
+          q.id.toUpperCase() === (payload.quotationId || '').toUpperCase() ||
+          (payload.customerName && q.customerExternalName.toLowerCase().includes(payload.customerName.toLowerCase()))
+      );
+      if (!quote) {
+        alert('Quotation not found in database.');
+        return;
+      }
+
+      const invItems: InvoiceLineItem[] = quote.items.map((it, idx) => ({
+        id: `inv-item-${Date.now()}-${idx}`,
+        name: it.name,
+        modelNo: it.modelNo,
+        indoorModelNo: it.indoorModelNo,
+        outdoorModelNo: it.outdoorModelNo,
+        type: it.type,
+        brand: it.brand,
+        serialNo: '',
+        indoorUnitSerial: '',
+        outdoorUnitSerial: '',
+        quantity: it.quantity,
+        rate: it.rate,
+        taxPercent: it.taxPercent,
+        isAmountWithTax: it.isAmountWithTax,
+        discount: 0,
+        lineTotal: it.lineTotal,
+      }));
+
+      const discount = Number(payload.discountAmount) || 0;
+      const totalAmount = Math.max(0, quote.totalAmount - discount);
+
+      const newInvId = await addInvoice({
+        customerId: quote.customerId || '',
+        customerExternalName: quote.customerExternalName,
+        customerPhone: quote.customerPhone,
+        billingAddress: quote.billingAddress,
+        installationAddress: quote.installationAddress,
+        linkedQuoteId: quote.id,
+        items: invItems,
+        subtotal: quote.subtotal,
+        taxAmount: quote.taxAmount,
+        discountAmount: discount,
+        totalAmount,
+        prepaidSplits: {
+          fromBalance: 0,
+          upi: { amount: 0, receivingBank: '', utr: '' },
+          card: { amount: 0, receivingBank: '', authId: '' },
+          chequeOrNeft: { amount: 0, chequeOrSlipOrUtr: '', bank: '' },
+          cash: { amount: 0, drawerRegister: '' },
+        },
+        totalPrepaid: 0,
+        amountDue: totalAmount,
+        paymentStatus: 'UNPAID',
+        gstNumber,
+        notes: `Converted from Quotation #${quote.id} via Lakhi AI Copilot`,
+      });
+
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === msgId
+            ? {
+                ...m,
+                action: {
+                  ...m.action!,
+                  status: 'DONE',
+                  resultId: `Converted to Tax Invoice #${newInvId}`,
+                },
+              }
+            : m
+        )
+      );
+    } catch (err: any) {
+      console.error('Error converting quotation:', err);
+      alert('Failed to convert quotation: ' + (err.message || 'Unknown error'));
+    }
+  };
+
   const handleConfirmInvoice = async (msgId: string, payload: any) => {
     try {
       const items = (payload.items || []).map((it: any, idx: number) => {
@@ -537,14 +661,19 @@ export const AiAssistantDrawer: React.FC<AiAssistantDrawerProps> = ({
         const tax = Number(it.taxPercent) || 18;
         const isTax = it.isAmountWithTax !== false;
         const lineTotal = isTax ? qty * rate : qty * rate * (1 + tax / 100);
+        const isAc = (it.type || 'AC').toUpperCase() === 'AC';
 
         return {
           id: `inv-item-${Date.now()}-${idx}`,
           name: it.name || 'Split Air Conditioner',
           modelNo: it.modelNo || 'STANDARD-MODEL',
+          indoorModelNo: it.indoorModelNo || (isAc && it.modelNo ? `${it.modelNo}-IDU` : undefined),
+          outdoorModelNo: it.outdoorModelNo || (isAc && it.modelNo ? `${it.modelNo}-ODU` : undefined),
           type: it.type || 'AC',
           brand: it.brand || 'Daikin',
-          serialNo: it.serialNo || '',
+          serialNo: it.serialNo || it.indoorUnitSerial || '',
+          indoorUnitSerial: it.indoorUnitSerial || it.serialNo || '',
+          outdoorUnitSerial: it.outdoorUnitSerial || '',
           quantity: qty,
           rate,
           taxPercent: tax,
@@ -610,11 +739,14 @@ export const AiAssistantDrawer: React.FC<AiAssistantDrawerProps> = ({
         Number(payload.quantity) ||
           (Array.isArray(payload.serialNumbers) && payload.serialNumbers.length > 0
             ? payload.serialNumbers.length
+            : Array.isArray(payload.indoorSerials) && payload.indoorSerials.length > 0
+            ? payload.indoorSerials.length
             : 1)
       );
 
       const brandPrefix = (payload.brand || 'LAK').slice(0, 3).toUpperCase();
       const modelClean = (payload.modelNo || 'AC').replace(/[^a-zA-Z0-9]/g, '').slice(0, 5).toUpperCase();
+      const isAc = (payload.type || 'AC').toUpperCase() === 'AC';
 
       const createdIds: string[] = [];
       for (let i = 0; i < qty; i++) {
@@ -625,12 +757,42 @@ export const AiAssistantDrawer: React.FC<AiAssistantDrawerProps> = ({
             ? payload.serialNo.trim()
             : `${brandPrefix}-${modelClean}-${Date.now().toString().slice(-4)}${(i + 1).toString().padStart(2, '0')}`;
 
+        const indoorSerial =
+          Array.isArray(payload.indoorSerials) && payload.indoorSerials[i]
+            ? payload.indoorSerials[i].trim()
+            : qty === 1 && payload.indoorUnitSerial
+            ? payload.indoorUnitSerial.trim()
+            : isAc
+            ? `${serial}-IDU`
+            : undefined;
+
+        const outdoorSerial =
+          Array.isArray(payload.outdoorSerials) && payload.outdoorSerials[i]
+            ? payload.outdoorSerials[i].trim()
+            : qty === 1 && payload.outdoorUnitSerial
+            ? payload.outdoorUnitSerial.trim()
+            : isAc
+            ? `${serial}-ODU`
+            : undefined;
+
+        const indoorModel =
+          payload.indoorModelNo?.trim() ||
+          (isAc && payload.modelNo ? `${payload.modelNo}-IDU` : undefined);
+
+        const outdoorModel =
+          payload.outdoorModelNo?.trim() ||
+          (isAc && payload.modelNo ? `${payload.modelNo}-ODU` : undefined);
+
         const newStockId = await addInventoryItem({
           name: payload.name || `${payload.brand || 'Daikin'} AC`,
           modelNo: payload.modelNo || 'FTKF50TV',
+          indoorModelNo: indoorModel,
+          outdoorModelNo: outdoorModel,
           type: payload.type || 'AC',
           brand: payload.brand || 'Daikin',
           serialNo: serial,
+          indoorUnitSerial: indoorSerial,
+          outdoorUnitSerial: outdoorSerial,
           sellingPrice: Number(payload.sellingPrice) || 45000,
         });
         createdIds.push(newStockId);
@@ -1125,8 +1287,12 @@ export const AiAssistantDrawer: React.FC<AiAssistantDrawerProps> = ({
         ...(payload.name ? { name: payload.name } : {}),
         ...(payload.brand ? { brand: payload.brand } : {}),
         ...(payload.modelNo ? { modelNo: payload.modelNo } : {}),
+        ...(payload.indoorModelNo ? { indoorModelNo: payload.indoorModelNo } : {}),
+        ...(payload.outdoorModelNo ? { outdoorModelNo: payload.outdoorModelNo } : {}),
         ...(payload.type ? { type: payload.type } : {}),
         ...(payload.serialNo ? { serialNo: payload.serialNo } : {}),
+        ...(payload.indoorUnitSerial ? { indoorUnitSerial: payload.indoorUnitSerial } : {}),
+        ...(payload.outdoorUnitSerial ? { outdoorUnitSerial: payload.outdoorUnitSerial } : {}),
         ...(payload.sellingPrice !== undefined ? { sellingPrice: Number(payload.sellingPrice) } : {}),
         ...(payload.status ? { status: payload.status } : {}),
         ...(payload.updates || {}),
@@ -1392,6 +1558,24 @@ export const AiAssistantDrawer: React.FC<AiAssistantDrawerProps> = ({
           </div>
 
           <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                if (isTtsEnabled) {
+                  stopSpeaking();
+                  setIsTtsEnabled(false);
+                } else {
+                  setIsTtsEnabled(true);
+                  speakText('Voice readout enabled for Lakhi AI.');
+                }
+              }}
+              className={`p-2 rounded-xl transition-colors ${
+                isTtsEnabled ? 'bg-amber-400 text-slate-900 shadow-sm' : 'bg-white/20 hover:bg-white/30 text-white'
+              }`}
+              title={isTtsEnabled ? 'Disable Voice Readout (TTS)' : 'Enable Voice Readout (TTS)'}
+            >
+              {isTtsEnabled ? <Volume2 className="w-4 h-4 animate-pulse" /> : <VolumeX className="w-4 h-4" />}
+            </button>
             {onOpenBarcodeScanner && (
               <button
                 type="button"
@@ -1632,7 +1816,79 @@ export const AiAssistantDrawer: React.FC<AiAssistantDrawerProps> = ({
                         </div>
                       )}
 
-                      {/* ADD STOCK CONFIRMATION */}
+                      {/* CONVERT QUOTATION TO INVOICE */}
+                      {msg.action.type === 'CONVERT_QUOTATION_TO_INVOICE' && (
+                        <div>
+                          <div className="flex items-center justify-between pb-2 border-b border-slate-100 dark:border-slate-800">
+                            <div className="flex items-center gap-2 text-xs font-black text-indigo-600 dark:text-indigo-400">
+                              <Receipt className="w-4 h-4" />
+                              <span>CONVERT QUOTE TO TAX INVOICE</span>
+                            </div>
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-black uppercase bg-indigo-100 text-indigo-800 dark:bg-indigo-950 dark:text-indigo-300">
+                              {msg.action.status}
+                            </span>
+                          </div>
+
+                          <div className="mt-2 bg-slate-50 dark:bg-slate-900 p-2.5 rounded-xl text-xs space-y-1">
+                            <div className="font-bold text-slate-900 dark:text-white">
+                              Quotation ID: {msg.action.payload?.quotationId || 'Latest Quote'}
+                            </div>
+                            {msg.action.payload?.customerName && (
+                              <div className="text-[11px] text-slate-600 dark:text-slate-400">
+                                Customer: {msg.action.payload.customerName}
+                              </div>
+                            )}
+                            {msg.action.payload?.discountAmount ? (
+                              <div className="text-[11px] text-emerald-600 font-bold">
+                                Applied Discount: ₹{Number(msg.action.payload.discountAmount).toLocaleString('en-IN')}
+                              </div>
+                            ) : null}
+                          </div>
+
+                          {msg.action.status === 'PENDING' ? (
+                            <div className="mt-3 flex items-center gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+                              <button
+                                type="button"
+                                onClick={() => handleConfirmConvertQuotation(msg.id, msg.action?.payload)}
+                                className="flex-1 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl shadow-xs flex items-center justify-center gap-1.5 transition-colors"
+                              >
+                                <Check className="w-4 h-4" />
+                                Convert to Tax Invoice Now
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setMessages((prev) =>
+                                    prev.map((m) =>
+                                      m.id === msg.id
+                                        ? { ...m, action: { ...m.action!, status: 'CANCELLED' } }
+                                        : m
+                                    )
+                                  )
+                                }
+                                className="px-3 py-2 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-700 dark:text-slate-300 font-bold text-xs rounded-xl transition-colors"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          ) : msg.action.status === 'DONE' && msg.action.resultId ? (
+                            <div className="mt-2.5 p-2 bg-emerald-50 dark:bg-emerald-950/40 rounded-xl text-xs flex items-center justify-between text-emerald-800 dark:text-emerald-300 font-bold">
+                              <span>✅ {msg.action.resultId}</span>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  onNavigateTab('invoices');
+                                  onClose();
+                                }}
+                                className="underline"
+                              >
+                                Open Invoices →
+                              </button>
+                            </div>
+                          ) : null}
+                        </div>
+                      )}
+
                       {/* ADD STOCK CONFIRMATION */}
                       {msg.action.type === 'ADD_STOCK' && (() => {
                         const qty = Math.max(
@@ -1640,6 +1896,8 @@ export const AiAssistantDrawer: React.FC<AiAssistantDrawerProps> = ({
                           Number(msg.action.payload?.quantity) ||
                             (Array.isArray(msg.action.payload?.serialNumbers) && msg.action.payload.serialNumbers.length > 0
                               ? msg.action.payload.serialNumbers.length
+                              : Array.isArray(msg.action.payload?.indoorSerials) && msg.action.payload.indoorSerials.length > 0
+                              ? msg.action.payload.indoorSerials.length
                               : 1)
                         );
                         const serials: string[] = Array.isArray(msg.action.payload?.serialNumbers)
@@ -1667,6 +1925,36 @@ export const AiAssistantDrawer: React.FC<AiAssistantDrawerProps> = ({
                                 <span>•</span>
                                 <span>Brand: {msg.action.payload?.brand || 'Daikin'}</span>
                               </div>
+
+                              {(msg.action.payload?.indoorModelNo || msg.action.payload?.outdoorModelNo) && (
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-1 text-[11px] font-mono p-1.5 bg-blue-50/50 dark:bg-blue-950/30 rounded-lg">
+                                  {msg.action.payload?.indoorModelNo && (
+                                    <div className="text-blue-700 dark:text-blue-300 font-semibold">
+                                      IDU: {msg.action.payload.indoorModelNo}
+                                    </div>
+                                  )}
+                                  {msg.action.payload?.outdoorModelNo && (
+                                    <div className="text-purple-700 dark:text-purple-300 font-semibold">
+                                      ODU: {msg.action.payload.outdoorModelNo}
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+
+                              {(msg.action.payload?.indoorUnitSerial || msg.action.payload?.outdoorUnitSerial) && (
+                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-1 text-[10px] font-mono p-1.5 bg-emerald-50/50 dark:bg-emerald-950/30 rounded-lg">
+                                  {msg.action.payload?.indoorUnitSerial && (
+                                    <div className="text-emerald-700 dark:text-emerald-300">
+                                      Indoor SN: {msg.action.payload.indoorUnitSerial}
+                                    </div>
+                                  )}
+                                  {msg.action.payload?.outdoorUnitSerial && (
+                                    <div className="text-purple-700 dark:text-purple-300">
+                                      Outdoor SN: {msg.action.payload.outdoorUnitSerial}
+                                    </div>
+                                  )}
+                                </div>
+                              )}
 
                               {serials.length > 0 ? (
                                 <div className="pt-1 border-t border-slate-200 dark:border-slate-800">
