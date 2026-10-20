@@ -177,9 +177,13 @@ interface AppContextType {
   addInventoryItem: (data: {
     name: string;
     modelNo: string;
+    indoorModelNo?: string;
+    outdoorModelNo?: string;
     type: string;
     brand: string;
     serialNo: string;
+    indoorUnitSerial?: string;
+    outdoorUnitSerial?: string;
     sellingPrice: number;
     stockId?: string;
   }) => Promise<string>;
@@ -1182,9 +1186,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const addInventoryItem = async (data: {
     name: string;
     modelNo: string;
+    indoorModelNo?: string;
+    outdoorModelNo?: string;
     type: string;
     brand: string;
     serialNo: string;
+    indoorUnitSerial?: string;
+    outdoorUnitSerial?: string;
     sellingPrice: number;
     stockId?: string;
   }): Promise<string> => {
@@ -1194,7 +1202,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const newSku = `SKU-${Date.now().toString().slice(-6)}-${cleanSeq}`;
 
     // Format dedicated Stock ID: eg {sr no}-{id}
-    const cleanSerial = (data.serialNo || '').trim();
+    const cleanSerial = (data.serialNo || data.indoorUnitSerial || '').trim();
     const stockId = data.stockId?.trim() || (cleanSerial ? `${cleanSerial}-${cleanSeq}` : `STK-${(data.modelNo || 'AC').replace(/[^a-zA-Z0-9]/g, '').slice(0, 6).toUpperCase()}-${cleanSeq}`);
 
     const item: InventoryItem = {
@@ -1202,9 +1210,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       stockId,
       name: data.name,
       modelNo: data.modelNo,
+      indoorModelNo: data.indoorModelNo,
+      outdoorModelNo: data.outdoorModelNo,
       type: data.type,
       brand: data.brand,
       serialNo: data.serialNo, // Physical manufacturer barcode / serial number is strictly preserved
+      indoorUnitSerial: data.indoorUnitSerial,
+      outdoorUnitSerial: data.outdoorUnitSerial,
       barcode: data.serialNo,
       status: 'AVAILABLE',
       sellingPrice: data.sellingPrice,

@@ -29,6 +29,7 @@ import { useApp } from '../../context/AppContext';
 import { InventoryItem, StockStatus } from '../../types';
 import { InventoryQrScannerModal } from './InventoryQrScannerModal';
 import { ProductQrLabelModal } from './ProductQrLabelModal';
+import { ProductBarcodeModal } from './ProductBarcodeModal';
 import { stripRandomSuffix, generateRandomCode } from '../../utils/idGenerator';
 
 interface InventoryGodownProps {
@@ -52,7 +53,7 @@ export const InventoryGodown: React.FC<InventoryGodownProps> = ({ onBillItem }) 
 
   const [search, setSearch] = useState('');
   const [filterType, setFilterType] = useState('ALL');
-  const [filterStatus, setFilterStatus] = useState<'ALL' | 'AVAILABLE' | 'SOLD' | 'ARCHIVED'>('ALL');
+  const [filterStatus, setFilterStatus] = useState<'ALL' | 'AVAILABLE' | 'SOLD' | 'ARCHIVED' | 'NEEDS_BARCODE'>('ALL');
   const [stockViewLayout, setStockViewLayout] = useState<'GROUPED' | 'LIST'>('GROUPED');
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
   const [isAddOpen, setIsAddOpen] = useState(false);
@@ -60,6 +61,8 @@ export const InventoryGodown: React.FC<InventoryGodownProps> = ({ onBillItem }) 
   // Form State for Adding In-Store Stock (with multi-unit & batch support)
   const [formName, setFormName] = useState('');
   const [formModelNo, setFormModelNo] = useState('');
+  const [formIndoorModelNo, setFormIndoorModelNo] = useState('');
+  const [formOutdoorModelNo, setFormOutdoorModelNo] = useState('');
   const [formType, setFormType] = useState('AC');
   const [formBrand, setFormBrand] = useState('');
   const [formSerialNo, setFormSerialNo] = useState('');
@@ -69,6 +72,10 @@ export const InventoryGodown: React.FC<InventoryGodownProps> = ({ onBillItem }) 
   const [formPrice, setFormPrice] = useState<number | ''>('');
   const [formQuantity, setFormQuantity] = useState<number>(1);
   const [formSerialNumbers, setFormSerialNumbers] = useState<string[]>(['']);
+  const [formIndoorSerial, setFormIndoorSerial] = useState('');
+  const [formOutdoorSerial, setFormOutdoorSerial] = useState('');
+  const [formIndoorSerials, setFormIndoorSerials] = useState<string[]>(['']);
+  const [formOutdoorSerials, setFormOutdoorSerials] = useState<string[]>(['']);
   const [isBulkPasteOpen, setIsBulkPasteOpen] = useState(false);
   const [bulkPasteText, setBulkPasteText] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -86,9 +93,13 @@ export const InventoryGodown: React.FC<InventoryGodownProps> = ({ onBillItem }) 
   const [editingItem, setEditingItem] = useState<InventoryItem | null>(null);
   const [editName, setEditName] = useState('');
   const [editModelNo, setEditModelNo] = useState('');
+  const [editIndoorModelNo, setEditIndoorModelNo] = useState('');
+  const [editOutdoorModelNo, setEditOutdoorModelNo] = useState('');
   const [editType, setEditType] = useState('AC');
   const [editBrand, setEditBrand] = useState('');
   const [editSerialNo, setEditSerialNo] = useState('');
+  const [editIndoorSerial, setEditIndoorSerial] = useState('');
+  const [editOutdoorSerial, setEditOutdoorSerial] = useState('');
   const [editStockId, setEditStockId] = useState('');
   const [editStockIncludePrefix, setEditStockIncludePrefix] = useState(true);
   const [editStockIncludeDigits, setEditStockIncludeDigits] = useState(false);
@@ -98,7 +109,50 @@ export const InventoryGodown: React.FC<InventoryGodownProps> = ({ onBillItem }) 
 
   // QR Scanner Modal State & Product Label Modal State
   const [isScannerOpen, setIsScannerOpen] = useState(false);
+  const [scannerTargetField, setScannerTargetField] = useState<{
+    target:
+      | 'formModelNo'
+      | 'formIndoorModelNo'
+      | 'formOutdoorModelNo'
+      | 'formSerialNo'
+      | 'formIndoorSerial'
+      | 'formOutdoorSerial'
+      | 'formMultiSerial'
+      | 'formMultiIndoor'
+      | 'formMultiOutdoor'
+      | 'editModelNo'
+      | 'editIndoorModelNo'
+      | 'editOutdoorModelNo'
+      | 'editSerialNo'
+      | 'editIndoorSerial'
+      | 'editOutdoorSerial';
+    index?: number;
+    label: string;
+  } | null>(null);
   const [selectedItemForLabel, setSelectedItemForLabel] = useState<InventoryItem | null>(null);
+  const [isBarcodeModalOpen, setIsBarcodeModalOpen] = useState(false);
+  const [selectedItemForBarcode, setSelectedItemForBarcode] = useState<InventoryItem | null>(null);
+  const [selectedBarcodeBatchIds, setSelectedBarcodeBatchIds] = useState<string[] | undefined>(undefined);
+
+  // Quick toggle QR Code Added status for an inventory unit
+  const handleToggleItemBarcode = async (item: InventoryItem) => {
+    const nextVal = !item.barcodeAdded;
+    try {
+      await updateInventoryItem(item.id, {
+        barcodeAdded: nextVal,
+        barcodePrintedAt: nextVal ? new Date().toISOString() : undefined,
+      });
+      setToastMessage(
+        nextVal
+          ? `Marked "${item.name}" (${item.serialNo || item.id}) as QR Code Added (excluded from Print All).`
+          : `Marked "${item.name}" as Needs QR Code.`
+      );
+      setTimeout(() => setToastMessage(null), 3500);
+    } catch (err: any) {
+      console.error('Failed to update status in Firebase:', err);
+      alert('Error updating QR status: ' + (err.message || 'Unknown error'));
+    }
+  };
 
   /**
    * Helper: Generate clean sequential serial numbers based on Brand, Model, and base serial
@@ -139,9 +193,17 @@ export const InventoryGodown: React.FC<InventoryGodownProps> = ({ onBillItem }) 
     setFormQuantity(qty);
     setFormSerialNumbers((prev) => {
       const next = [...prev];
-      while (next.length < qty) {
-        next.push('');
-      }
+      while (next.length < qty) next.push('');
+      return next.slice(0, qty);
+    });
+    setFormIndoorSerials((prev) => {
+      const next = [...prev];
+      while (next.length < qty) next.push('');
+      return next.slice(0, qty);
+    });
+    setFormOutdoorSerials((prev) => {
+      const next = [...prev];
+      while (next.length < qty) next.push('');
       return next.slice(0, qty);
     });
   };
@@ -152,6 +214,93 @@ export const InventoryGodown: React.FC<InventoryGodownProps> = ({ onBillItem }) 
     if (formQuantity === 1) {
       setFormSerialNo(serials[0]);
     }
+  };
+
+  const handleScannedFieldExtracted = (val: string) => {
+    if (!scannerTargetField) return;
+    const clean = val.trim();
+    switch (scannerTargetField.target) {
+      case 'formModelNo':
+        setFormModelNo(clean);
+        break;
+      case 'formIndoorModelNo':
+        setFormIndoorModelNo(clean);
+        break;
+      case 'formOutdoorModelNo':
+        setFormOutdoorModelNo(clean);
+        break;
+      case 'formSerialNo':
+        setFormSerialNo(clean);
+        setFormSerialNumbers((prev) => {
+          const n = [...prev];
+          n[0] = clean;
+          return n;
+        });
+        break;
+      case 'formIndoorSerial':
+        setFormIndoorSerial(clean);
+        setFormIndoorSerials((prev) => {
+          const n = [...prev];
+          n[0] = clean;
+          return n;
+        });
+        break;
+      case 'formOutdoorSerial':
+        setFormOutdoorSerial(clean);
+        setFormOutdoorSerials((prev) => {
+          const n = [...prev];
+          n[0] = clean;
+          return n;
+        });
+        break;
+      case 'formMultiSerial':
+        if (scannerTargetField.index !== undefined) {
+          setFormSerialNumbers((prev) => {
+            const next = [...prev];
+            next[scannerTargetField.index!] = clean;
+            return next;
+          });
+        }
+        break;
+      case 'formMultiIndoor':
+        if (scannerTargetField.index !== undefined) {
+          setFormIndoorSerials((prev) => {
+            const next = [...prev];
+            next[scannerTargetField.index!] = clean;
+            return next;
+          });
+        }
+        break;
+      case 'formMultiOutdoor':
+        if (scannerTargetField.index !== undefined) {
+          setFormOutdoorSerials((prev) => {
+            const next = [...prev];
+            next[scannerTargetField.index!] = clean;
+            return next;
+          });
+        }
+        break;
+      case 'editModelNo':
+        setEditModelNo(clean);
+        break;
+      case 'editIndoorModelNo':
+        setEditIndoorModelNo(clean);
+        break;
+      case 'editOutdoorModelNo':
+        setEditOutdoorModelNo(clean);
+        break;
+      case 'editSerialNo':
+        setEditSerialNo(clean);
+        break;
+      case 'editIndoorSerial':
+        setEditIndoorSerial(clean);
+        break;
+      case 'editOutdoorSerial':
+        setEditOutdoorSerial(clean);
+        break;
+    }
+    setScannerTargetField(null);
+    setIsScannerOpen(false);
   };
 
   const handleApplyBulkPaste = () => {
@@ -172,36 +321,54 @@ export const InventoryGodown: React.FC<InventoryGodownProps> = ({ onBillItem }) 
   const handleOpenAddWithScannedData = (data: {
     name?: string;
     modelNo?: string;
+    indoorModelNo?: string;
+    outdoorModelNo?: string;
     brand?: string;
     serialNo?: string;
+    indoorUnitSerial?: string;
+    outdoorUnitSerial?: string;
     price?: number;
     type?: string;
   }) => {
     setFormName(data.name || '');
     setFormModelNo(data.modelNo || '');
+    setFormIndoorModelNo(data.indoorModelNo || '');
+    setFormOutdoorModelNo(data.outdoorModelNo || '');
     setFormBrand(data.brand || '');
-    setFormSerialNo(data.serialNo || '');
+    setFormSerialNo(data.serialNo || data.indoorUnitSerial || '');
+    setFormIndoorSerial(data.indoorUnitSerial || (data.type === 'AC' ? data.serialNo : '') || '');
+    setFormOutdoorSerial(data.outdoorUnitSerial || '');
     setFormPrice(data.price ?? '');
     setFormType(data.type || 'AC');
     setFormQuantity(1);
-    setFormSerialNumbers([data.serialNo || '']);
+    setFormSerialNumbers([data.serialNo || data.indoorUnitSerial || '']);
+    setFormIndoorSerials([data.indoorUnitSerial || (data.type === 'AC' ? data.serialNo : '') || '']);
+    setFormOutdoorSerials([data.outdoorUnitSerial || '']);
     setIsAddOpen(true);
   };
 
   const handleQuickAddDirect = async (item: {
     name: string;
     modelNo: string;
+    indoorModelNo?: string;
+    outdoorModelNo?: string;
     type: string;
     brand: string;
     serialNo: string;
+    indoorUnitSerial?: string;
+    outdoorUnitSerial?: string;
     sellingPrice: number;
   }) => {
     await addInventoryItem({
       name: item.name,
       modelNo: item.modelNo,
+      indoorModelNo: item.indoorModelNo,
+      outdoorModelNo: item.outdoorModelNo,
       type: item.type,
       brand: item.brand,
       serialNo: item.serialNo,
+      indoorUnitSerial: item.indoorUnitSerial,
+      outdoorUnitSerial: item.outdoorUnitSerial,
       sellingPrice: item.sellingPrice,
     });
   };
@@ -210,9 +377,13 @@ export const InventoryGodown: React.FC<InventoryGodownProps> = ({ onBillItem }) 
     setEditingItem(item);
     setEditName(item.name);
     setEditModelNo(item.modelNo);
+    setEditIndoorModelNo(item.indoorModelNo || '');
+    setEditOutdoorModelNo(item.outdoorModelNo || '');
     setEditType(item.type);
     setEditBrand(item.brand);
     setEditSerialNo(item.serialNo);
+    setEditIndoorSerial(item.indoorUnitSerial || (item.type === 'AC' ? item.serialNo : ''));
+    setEditOutdoorSerial(item.outdoorUnitSerial || '');
     setEditStockId(item.stockId || '');
     setEditStockIncludePrefix(true);
     setEditStockIncludeDigits(false);
@@ -239,12 +410,21 @@ export const InventoryGodown: React.FC<InventoryGodownProps> = ({ onBillItem }) 
         finalEditStockId = clean;
       }
 
+      const isAc = editType.trim().toUpperCase() === 'AC';
+      const finalSerial = isAc
+        ? (editIndoorSerial.trim() || editOutdoorSerial.trim() || editSerialNo.trim())
+        : editSerialNo.trim();
+
       await updateInventoryItem(editingItem.id, {
         name: editName.trim(),
         modelNo: editModelNo.trim(),
+        indoorModelNo: isAc ? (editIndoorModelNo.trim() || undefined) : undefined,
+        outdoorModelNo: isAc ? (editOutdoorModelNo.trim() || undefined) : undefined,
         type: editType.trim(),
         brand: editBrand.trim(),
-        serialNo: editSerialNo.trim(),
+        serialNo: finalSerial,
+        indoorUnitSerial: isAc ? (editIndoorSerial.trim() || undefined) : undefined,
+        outdoorUnitSerial: isAc ? (editOutdoorSerial.trim() || undefined) : undefined,
         stockId: finalEditStockId || undefined,
         sellingPrice: Number(editPrice) || 0,
         status: editStatus,
@@ -314,13 +494,28 @@ export const InventoryGodown: React.FC<InventoryGodownProps> = ({ onBillItem }) 
     try {
       const qty = Math.max(1, formQuantity);
       for (let i = 0; i < qty; i++) {
+        const isAc = formType.trim().toUpperCase() === 'AC';
+        let indoorSN = isAc
+          ? (qty === 1 ? (formIndoorSerial.trim() || formIndoorSerials[0]?.trim()) : formIndoorSerials[i]?.trim())
+          : undefined;
+        let outdoorSN = isAc
+          ? (qty === 1 ? (formOutdoorSerial.trim() || formOutdoorSerials[0]?.trim()) : formOutdoorSerials[i]?.trim())
+          : undefined;
+
         let serial =
           qty === 1
             ? (formSerialNo.trim() || formSerialNumbers[0]?.trim() || '')
             : (formSerialNumbers[i]?.trim() || '');
 
-        if (!serial) {
-          serial = `${(formBrand || 'LAK').slice(0, 3).toUpperCase()}-${(formModelNo || 'AC').replace(/[^a-zA-Z0-9]/g, '').slice(0, 5)}-${Date.now().toString().slice(-4)}${(i + 1).toString().padStart(2, '0')}`;
+        if (isAc) {
+          if (!serial) {
+            serial = indoorSN || outdoorSN || `${(formBrand || 'LAK').slice(0, 3).toUpperCase()}-${(formModelNo || 'AC').replace(/[^a-zA-Z0-9]/g, '').slice(0, 5)}-${Date.now().toString().slice(-4)}${(i + 1).toString().padStart(2, '0')}`;
+          }
+          if (!indoorSN) indoorSN = serial;
+        } else {
+          if (!serial) {
+            serial = `${(formBrand || 'LAK').slice(0, 3).toUpperCase()}-${(formModelNo || 'AC').replace(/[^a-zA-Z0-9]/g, '').slice(0, 5)}-${Date.now().toString().slice(-4)}${(i + 1).toString().padStart(2, '0')}`;
+          }
         }
 
         let unitStockId: string | undefined = undefined;
@@ -342,9 +537,13 @@ export const InventoryGodown: React.FC<InventoryGodownProps> = ({ onBillItem }) 
         await addInventoryItem({
           name: formName.trim(),
           modelNo: formModelNo.trim(),
+          indoorModelNo: isAc ? (formIndoorModelNo.trim() || undefined) : undefined,
+          outdoorModelNo: isAc ? (formOutdoorModelNo.trim() || undefined) : undefined,
           type: formType.trim(),
           brand: formBrand.trim(),
           serialNo: serial,
+          indoorUnitSerial: isAc ? (indoorSN || undefined) : undefined,
+          outdoorUnitSerial: isAc ? (outdoorSN || undefined) : undefined,
           sellingPrice: Number(formPrice) || 0,
           stockId: unitStockId,
         });
@@ -354,7 +553,13 @@ export const InventoryGodown: React.FC<InventoryGodownProps> = ({ onBillItem }) 
       const addedName = formName.trim();
       setFormName('');
       setFormModelNo('');
+      setFormIndoorModelNo('');
+      setFormOutdoorModelNo('');
       setFormSerialNo('');
+      setFormIndoorSerial('');
+      setFormOutdoorSerial('');
+      setFormIndoorSerials(['']);
+      setFormOutdoorSerials(['']);
       setFormStockId('');
       setFormStockIncludePrefix(true);
       setFormStockIncludeDigits(false);
@@ -375,6 +580,7 @@ export const InventoryGodown: React.FC<InventoryGodownProps> = ({ onBillItem }) 
   const soldCount = inventory.filter((i) => !isItemArchived(i) && i.status === 'SOLD').length;
   const activeInStoreCount = inventory.filter((i) => !isItemArchived(i)).length;
   const archivedCount = inventory.filter((i) => isItemArchived(i)).length;
+  const needsBarcodeCount = inventory.filter((i) => !isItemArchived(i) && !i.barcodeAdded).length;
 
   // Strict filtering: Archived products ONLY show in the 'ARCHIVED' list, never in 'ALL' or other active lists
   const filteredItems = inventory.filter((item) => {
@@ -383,6 +589,8 @@ export const InventoryGodown: React.FC<InventoryGodownProps> = ({ onBillItem }) 
     // If filtering specifically for ARCHIVED
     if (filterStatus === 'ARCHIVED') {
       if (!archived) return false;
+    } else if (filterStatus === 'NEEDS_BARCODE') {
+      if (archived || item.barcodeAdded) return false;
     } else {
       // In ALL, AVAILABLE, and SOLD: ARCHIVED PRODUCTS NEVER APPEAR
       if (archived) return false;
@@ -531,6 +739,34 @@ export const InventoryGodown: React.FC<InventoryGodownProps> = ({ onBillItem }) 
 
         <div className="flex flex-wrap items-center gap-2 self-start sm:self-auto">
           <button
+            onClick={() => {
+              const active = filteredItems.find((it) => it.status === 'AVAILABLE') || filteredItems[0];
+              if (active) setSelectedItemForLabel(active);
+            }}
+            className="px-3.5 py-2.5 bg-amber-50 hover:bg-amber-100 dark:bg-amber-950/40 dark:hover:bg-amber-900/50 text-amber-800 dark:text-amber-300 rounded-xl text-xs font-bold shadow-xs flex items-center gap-1.5 transition-colors border border-amber-300 dark:border-amber-800 active:scale-98"
+            title="Make, share or print showroom product tag with Stock ID & price"
+          >
+            <Tag className="w-4 h-4 text-amber-600 dark:text-amber-400" />
+            <span>Product Tag</span>
+          </button>
+          <button
+            onClick={() => {
+              setSelectedItemForBarcode(null);
+              setSelectedBarcodeBatchIds(undefined);
+              setIsBarcodeModalOpen(true);
+            }}
+            className="px-3.5 py-2.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 rounded-xl text-xs font-bold shadow-xs flex items-center gap-1.5 transition-colors border border-slate-200 dark:border-slate-700 active:scale-98"
+            title="Make & print multiple product internal QR codes with cutting lines"
+          >
+            <QrCode className="w-4 h-4 text-red-600 dark:text-red-400" />
+            <span>Print QR Codes</span>
+            {needsBarcodeCount > 0 && (
+              <span className="ml-1 px-1.5 py-0.2 rounded-full bg-amber-500 text-white text-[10px] font-black">
+                {needsBarcodeCount} New
+              </span>
+            )}
+          </button>
+          <button
             onClick={() => setIsScannerOpen(true)}
             className="px-4 py-2.5 bg-slate-900 hover:bg-black dark:bg-slate-800 dark:hover:bg-slate-700 text-white rounded-xl text-xs font-bold shadow-xs flex items-center gap-2 transition-all border border-slate-700/60 active:scale-98"
             title="Open camera to scan QR or carton barcode"
@@ -549,7 +785,7 @@ export const InventoryGodown: React.FC<InventoryGodownProps> = ({ onBillItem }) 
       </div>
 
       {/* Metric Badges (Clickable to switch filter) */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
         <button
           type="button"
           onClick={() => setFilterStatus('AVAILABLE')}
@@ -584,6 +820,41 @@ export const InventoryGodown: React.FC<InventoryGodownProps> = ({ onBillItem }) 
             {soldCount}
           </div>
           <span className="text-[10px] text-slate-400">Assigned to bill</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setFilterStatus('NEEDS_BARCODE')}
+          className={`p-4 rounded-2xl border text-left transition-all ${
+            filterStatus === 'NEEDS_BARCODE'
+              ? 'bg-amber-50 dark:bg-amber-950/40 border-amber-400 dark:border-amber-700 ring-2 ring-amber-500/30'
+              : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:border-amber-300 dark:hover:border-amber-800'
+          } shadow-xs cursor-pointer`}
+        >
+          <div className="flex items-center justify-between">
+            <span className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider block">
+              🏷️ Needs QR Code
+            </span>
+            {needsBarcodeCount > 0 && (
+              <span
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setSelectedItemForBarcode(null);
+                  setSelectedBarcodeBatchIds(undefined);
+                  setIsBarcodeModalOpen(true);
+                }}
+                className="text-[10px] font-bold text-amber-700 dark:text-amber-300 underline hover:text-amber-900"
+              >
+                Print
+              </span>
+            )}
+          </div>
+          <div className="text-2xl font-black text-amber-600 dark:text-amber-400 mt-1">
+            {needsBarcodeCount}
+          </div>
+          <span className="text-[10px] text-slate-400">
+            {needsBarcodeCount === 0 ? 'All stock QR codes printed' : 'Unprinted physical units'}
+          </span>
         </button>
 
         <button
@@ -687,6 +958,23 @@ export const InventoryGodown: React.FC<InventoryGodownProps> = ({ onBillItem }) 
               }`}
             >
               Sold ({soldCount})
+            </button>
+            <button
+              onClick={() => setFilterStatus('NEEDS_BARCODE')}
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-1.5 ${
+                filterStatus === 'NEEDS_BARCODE'
+                  ? 'bg-amber-500 text-white shadow-xs'
+                  : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-700'
+              }`}
+            >
+              <span>⚠️ Needs QR Code</span>
+              <span className={`px-1.5 py-0.2 rounded-full text-[10px] font-black ${
+                filterStatus === 'NEEDS_BARCODE'
+                  ? 'bg-black/20 text-white'
+                  : 'bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300'
+              }`}>
+                {needsBarcodeCount}
+              </span>
             </button>
             <button
               onClick={() => setFilterStatus('ARCHIVED')}
@@ -856,6 +1144,44 @@ export const InventoryGodown: React.FC<InventoryGodownProps> = ({ onBillItem }) 
                         )}
                       </div>
 
+                      {/* Product Tag for Showroom (Tag Icon) */}
+                      {group.items.length > 0 && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const availableOrFirst = group.items.find((it) => it.status === 'AVAILABLE') || group.items[0];
+                            setSelectedItemForLabel(availableOrFirst);
+                          }}
+                          className="px-2.5 py-1.5 bg-amber-50 hover:bg-amber-100 text-amber-800 dark:bg-amber-950/60 dark:text-amber-300 rounded-xl text-xs font-bold border border-amber-300 dark:border-amber-800 flex items-center gap-1.5 transition-colors"
+                          title={`View, Share & Print Showroom Product Tag for ${group.modelNo}`}
+                        >
+                          <Tag className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
+                          <span>Product Tag</span>
+                        </button>
+                      )}
+
+                      {/* Print QR Stickers for this Model (QR Code Icon) */}
+                      {group.items.some((it) => !isItemArchived(it) && !it.barcodeAdded) && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const unprinted = group.items
+                              .filter((it) => !isItemArchived(it) && !it.barcodeAdded)
+                              .map((it) => it.id);
+                            setSelectedBarcodeBatchIds(unprinted);
+                            setSelectedItemForBarcode(null);
+                            setIsBarcodeModalOpen(true);
+                          }}
+                          className="px-2.5 py-1.5 bg-red-50 hover:bg-red-100 text-red-800 dark:bg-red-950/60 dark:text-red-300 rounded-xl text-xs font-bold border border-red-300 dark:border-red-800 flex items-center gap-1.5 transition-colors"
+                          title={`Print QR code stickers for unprinted units of ${group.modelNo}`}
+                        >
+                          <QrCode className="w-3.5 h-3.5 text-red-600 dark:text-red-400" />
+                          <span>
+                            Print QR ({group.items.filter((it) => !isItemArchived(it) && !it.barcodeAdded).length})
+                          </span>
+                        </button>
+                      )}
+
                       {/* Quick Add Inward Unit of this Model */}
                       <button
                         type="button"
@@ -877,7 +1203,7 @@ export const InventoryGodown: React.FC<InventoryGodownProps> = ({ onBillItem }) 
                           <tr className="bg-white dark:bg-slate-900/60 border-b border-slate-100 dark:border-slate-800 text-slate-400 text-[10px] uppercase font-bold">
                             <th className="px-4 py-2 w-12 text-center">Unit</th>
                             <th className="px-4 py-2">Stock ID</th>
-                            <th className="px-4 py-2">Carton Barcode / Serial</th>
+                            <th className="px-4 py-2">Carton Serial &amp; QR Status</th>
                             <th className="px-4 py-2">Unit Price</th>
                             <th className="px-4 py-2">Status</th>
                             <th className="px-4 py-2 text-right">Actions</th>
@@ -896,7 +1222,24 @@ export const InventoryGodown: React.FC<InventoryGodownProps> = ({ onBillItem }) 
                                 <div className="text-[9px] text-slate-400 font-mono mt-0.5">SKU: {item.id}</div>
                               </td>
                               <td className="px-4 py-2.5 font-mono text-[11px] text-slate-700 dark:text-slate-300">
-                                {item.serialNo ? (
+                                {item.type?.toUpperCase() === 'AC' ? (
+                                  <div className="space-y-0.5 text-[10px]">
+                                    <div className="flex items-center gap-1 font-bold text-slate-800 dark:text-slate-200">
+                                      <span className="text-[8px] uppercase px-1 py-0.2 bg-blue-100 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 rounded font-black">IDU</span>
+                                      {item.indoorModelNo && (
+                                        <span className="text-[9px] text-blue-700 dark:text-blue-300 font-mono">[{item.indoorModelNo}]</span>
+                                      )}
+                                      <span>{item.indoorUnitSerial || item.serialNo || 'None'}</span>
+                                    </div>
+                                    <div className="flex items-center gap-1 font-bold text-slate-800 dark:text-slate-200">
+                                      <span className="text-[8px] uppercase px-1 py-0.2 bg-indigo-100 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 rounded font-black">ODU</span>
+                                      {item.outdoorModelNo && (
+                                        <span className="text-[9px] text-indigo-700 dark:text-indigo-300 font-mono">[{item.outdoorModelNo}]</span>
+                                      )}
+                                      <span>{item.outdoorUnitSerial || 'None'}</span>
+                                    </div>
+                                  </div>
+                                ) : item.serialNo ? (
                                   <span className="flex items-center gap-1 font-bold text-slate-800 dark:text-slate-200">
                                     <Barcode className="w-3.5 h-3.5 text-slate-400 shrink-0" />
                                     <span>{item.serialNo}</span>
@@ -904,6 +1247,35 @@ export const InventoryGodown: React.FC<InventoryGodownProps> = ({ onBillItem }) 
                                 ) : (
                                   <span className="text-slate-400 italic">None</span>
                                 )}
+                                {/* QR Code Added status toggle pill */}
+                                <div className="mt-1">
+                                  <button
+                                    type="button"
+                                    onClick={() => handleToggleItemBarcode(item)}
+                                    className={`px-2 py-0.5 rounded-full text-[10px] font-bold border transition-colors flex items-center gap-1 ${
+                                      item.barcodeAdded
+                                        ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300 border-emerald-300 dark:border-emerald-800 hover:bg-emerald-100'
+                                        : 'bg-amber-50 text-amber-700 dark:bg-amber-950/60 dark:text-amber-300 border-amber-300 dark:border-amber-800 hover:bg-amber-100'
+                                    }`}
+                                    title={
+                                      item.barcodeAdded
+                                        ? 'QR code marked as Added. Click to change to Needs QR.'
+                                        : 'Needs QR Code. Click to mark as QR Code Added (excluded when selecting Print All).'
+                                    }
+                                  >
+                                    {item.barcodeAdded ? (
+                                      <>
+                                        <CheckCircle2 className="w-2.5 h-2.5 text-emerald-600" />
+                                        <span>QR Added</span>
+                                      </>
+                                    ) : (
+                                      <>
+                                        <span className="w-1.5 h-1.5 rounded-full bg-amber-500"></span>
+                                        <span>Needs QR</span>
+                                      </>
+                                    )}
+                                  </button>
+                                </div>
                               </td>
                               <td className="px-4 py-2.5 font-bold font-mono text-slate-900 dark:text-white">
                                 ₹{item.sellingPrice.toLocaleString('en-IN')}
@@ -951,10 +1323,20 @@ export const InventoryGodown: React.FC<InventoryGodownProps> = ({ onBillItem }) 
                                   )}
                                   <button
                                     onClick={() => setSelectedItemForLabel(item)}
-                                    className="p-1.5 text-slate-500 hover:text-slate-900 dark:hover:text-white rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
-                                    title="View / Print Product QR Code Label"
+                                    className="p-1.5 text-amber-600 dark:text-amber-400 hover:text-amber-700 rounded-lg hover:bg-amber-50 dark:hover:bg-amber-950/40 transition-colors"
+                                    title="View / Print / Share Product Stock Tag (Showroom tag with Stock ID & Price)"
                                   >
-                                    <QrCode className="w-3.5 h-3.5 text-red-500" />
+                                    <Tag className="w-3.5 h-3.5 text-amber-500" />
+                                  </button>
+                                  <button
+                                    onClick={() => {
+                                      setSelectedItemForBarcode(item);
+                                      setIsBarcodeModalOpen(true);
+                                    }}
+                                    className="p-1.5 text-slate-500 hover:text-red-600 dark:hover:text-red-400 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                                    title="Make & Print Product QR Code Sheet (Clean QR with Cut Lines)"
+                                  >
+                                    <QrCode className="w-3.5 h-3.5 text-red-600 dark:text-red-400" />
                                   </button>
                                   <button
                                     onClick={() => handleStartDuplicate(item)}
@@ -1063,7 +1445,24 @@ export const InventoryGodown: React.FC<InventoryGodownProps> = ({ onBillItem }) 
                         {item.brand}
                       </td>
                       <td className="px-4 py-3 font-mono text-[11px] text-slate-700 dark:text-slate-300">
-                        {item.serialNo ? (
+                        {item.type?.toUpperCase() === 'AC' ? (
+                          <div className="space-y-0.5 text-[10px]">
+                            <div className="flex items-center gap-1 font-bold text-slate-800 dark:text-slate-200">
+                              <span className="text-[8px] uppercase px-1 py-0.2 bg-blue-100 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 rounded font-black">IDU</span>
+                              {item.indoorModelNo && (
+                                <span className="text-[9px] text-blue-700 dark:text-blue-300 font-mono">[{item.indoorModelNo}]</span>
+                              )}
+                              <span>{item.indoorUnitSerial || item.serialNo || 'None'}</span>
+                            </div>
+                            <div className="flex items-center gap-1 font-bold text-slate-800 dark:text-slate-200">
+                              <span className="text-[8px] uppercase px-1 py-0.2 bg-indigo-100 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 rounded font-black">ODU</span>
+                              {item.outdoorModelNo && (
+                                <span className="text-[9px] text-indigo-700 dark:text-indigo-300 font-mono">[{item.outdoorModelNo}]</span>
+                              )}
+                              <span>{item.outdoorUnitSerial || 'None'}</span>
+                            </div>
+                          </div>
+                        ) : item.serialNo ? (
                           <span className="flex items-center gap-1 font-bold text-slate-800 dark:text-slate-200">
                             <Barcode className="w-3.5 h-3.5 text-slate-400 shrink-0" />
                             <span>{item.serialNo}</span>
@@ -1071,6 +1470,35 @@ export const InventoryGodown: React.FC<InventoryGodownProps> = ({ onBillItem }) 
                         ) : (
                           <span className="text-slate-400 italic">None</span>
                         )}
+                        {/* Barcode Added status toggle pill */}
+                        <div className="mt-1">
+                          <button
+                            type="button"
+                            onClick={() => handleToggleItemBarcode(item)}
+                            className={`px-2 py-0.5 rounded-full text-[10px] font-bold border transition-colors flex items-center gap-1 ${
+                              item.barcodeAdded
+                                ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300 border-emerald-300 dark:border-emerald-800 hover:bg-emerald-100'
+                                : 'bg-amber-50 text-amber-700 dark:bg-amber-950/60 dark:text-amber-300 border-amber-300 dark:border-amber-800 hover:bg-amber-100'
+                            }`}
+                            title={
+                              item.barcodeAdded
+                                ? 'Barcode is marked as Added. Click to change to Needs Barcode.'
+                                : 'Needs Barcode. Click to mark as Barcode Added (excluded when selecting Print All).'
+                            }
+                          >
+                            {item.barcodeAdded ? (
+                              <>
+                                <CheckCircle2 className="w-2.5 h-2.5 text-emerald-600" />
+                                <span>Barcode Added</span>
+                              </>
+                            ) : (
+                              <>
+                                <span className="w-1.5 h-1.5 rounded-full bg-amber-500"></span>
+                                <span>Needs Barcode</span>
+                              </>
+                            )}
+                          </button>
+                        </div>
                       </td>
                       <td className="px-4 py-3 font-bold text-slate-900 dark:text-white">
                         ₹{item.sellingPrice.toLocaleString('en-IN')}
@@ -1123,10 +1551,20 @@ export const InventoryGodown: React.FC<InventoryGodownProps> = ({ onBillItem }) 
                           )}
                           <button
                             onClick={() => setSelectedItemForLabel(item)}
-                            className="p-1.5 text-slate-500 hover:text-slate-900 dark:hover:text-white rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
-                            title="View / Print Product QR Code Label"
+                            className="p-1.5 text-amber-600 dark:text-amber-400 hover:text-amber-700 rounded-lg hover:bg-amber-50 dark:hover:bg-amber-950/40 transition-colors"
+                            title="View / Print / Share Product Stock Tag (Showroom tag with Stock ID & Price)"
                           >
-                            <QrCode className="w-3.5 h-3.5 text-red-500" />
+                            <Tag className="w-3.5 h-3.5 text-amber-500" />
+                          </button>
+                          <button
+                            onClick={() => {
+                              setSelectedItemForBarcode(item);
+                              setIsBarcodeModalOpen(true);
+                            }}
+                            className="p-1.5 text-slate-500 hover:text-red-600 dark:hover:text-red-400 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                            title="Make & Print Product QR Code Sheet (Clean QR with Cut Lines)"
+                          >
+                            <QrCode className="w-3.5 h-3.5 text-red-600 dark:text-red-400" />
                           </button>
                           <button
                             onClick={() => handleStartDuplicate(item)}
@@ -1276,18 +1714,91 @@ export const InventoryGodown: React.FC<InventoryGodownProps> = ({ onBillItem }) 
               </div>
 
               <div>
-                <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
-                  Model Number / Series:
-                </label>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block font-bold text-slate-700 dark:text-slate-300">
+                    {formType.trim().toUpperCase() === 'AC' ? 'Set Model Number / Series:' : 'Model Number / Series:'}
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setScannerTargetField({ target: 'formModelNo', label: 'Model Number' });
+                      setIsScannerOpen(true);
+                    }}
+                    className="text-[11px] font-bold text-red-600 dark:text-red-400 hover:underline flex items-center gap-1 cursor-pointer"
+                    title="Scan model barcode or QR"
+                  >
+                    <Camera className="w-3 h-3" />
+                    <span>Scan Model</span>
+                  </button>
+                </div>
                 <input
                   type="text"
                   required
                   value={formModelNo}
                   onChange={(e) => setFormModelNo(e.target.value)}
                   placeholder="e.g. FTKF50TV16U"
-                  className="w-full px-3 py-2 border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white rounded-xl focus:ring-2 focus:ring-red-500 outline-none"
+                  className="w-full px-3 py-2 border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white rounded-xl focus:ring-2 focus:ring-red-500 outline-none font-mono"
                 />
               </div>
+
+              {/* If AC: Dedicated Indoor & Outdoor Model Numbers */}
+              {formType.trim().toUpperCase() === 'AC' && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-3 bg-blue-50/50 dark:bg-blue-950/20 rounded-2xl border border-blue-200/80 dark:border-blue-900/40">
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="block font-bold text-blue-700 dark:text-blue-300 text-xs">
+                        Indoor Model (IDU):
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setScannerTargetField({ target: 'formIndoorModelNo', label: 'Indoor Model (IDU)' });
+                          setIsScannerOpen(true);
+                        }}
+                        className="text-[11px] font-bold text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1 cursor-pointer"
+                        title="Scan IDU Model"
+                      >
+                        <Camera className="w-3 h-3" />
+                        <span>Scan IDU Model</span>
+                      </button>
+                    </div>
+                    <input
+                      type="text"
+                      value={formIndoorModelNo}
+                      onChange={(e) => setFormIndoorModelNo(e.target.value)}
+                      placeholder="e.g. FTKF50TV16U-IDU"
+                      className="w-full font-mono text-xs px-3 py-2 border border-blue-300 dark:border-blue-800 bg-white dark:bg-slate-800 text-slate-900 dark:text-white rounded-xl focus:ring-2 focus:ring-blue-500 outline-none"
+                    />
+                  </div>
+
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="block font-bold text-indigo-700 dark:text-indigo-300 text-xs">
+                        Outdoor Model (ODU):
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setScannerTargetField({ target: 'formOutdoorModelNo', label: 'Outdoor Model (ODU)' });
+                          setIsScannerOpen(true);
+                        }}
+                        className="text-[11px] font-bold text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1 cursor-pointer"
+                        title="Scan ODU Model"
+                      >
+                        <Camera className="w-3 h-3" />
+                        <span>Scan ODU Model</span>
+                      </button>
+                    </div>
+                    <input
+                      type="text"
+                      value={formOutdoorModelNo}
+                      onChange={(e) => setFormOutdoorModelNo(e.target.value)}
+                      placeholder="e.g. RKF50TV16U-ODU"
+                      className="w-full font-mono text-xs px-3 py-2 border border-indigo-300 dark:border-indigo-800 bg-white dark:bg-slate-800 text-slate-900 dark:text-white rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
+                    />
+                  </div>
+                </div>
+              )}
 
               {/* Price and Quantity Inward Row */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -1461,21 +1972,186 @@ export const InventoryGodown: React.FC<InventoryGodownProps> = ({ onBillItem }) 
                 )}
               </div>
 
-              {/* Serial Number Handling Section */}
-              {formQuantity === 1 ? (
+              {/* Serial Number Handling Section: If AC, strictly replace SR number with Indoor and Outdoor Serials */}
+              {formType.trim().toUpperCase() === 'AC' ? (
+                formQuantity === 1 ? (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-3.5 bg-blue-50/50 dark:bg-blue-950/20 rounded-2xl border border-blue-200/80 dark:border-blue-900/40">
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="block font-bold text-blue-700 dark:text-blue-300 text-xs">
+                          Indoor Unit Serial (IDU):
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setScannerTargetField({ target: 'formIndoorSerial', label: 'Indoor Serial (IDU)' });
+                            setIsScannerOpen(true);
+                          }}
+                          className="text-[11px] font-bold text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1 cursor-pointer"
+                        >
+                          <Camera className="w-3 h-3" />
+                          <span>Scan IDU</span>
+                        </button>
+                      </div>
+                      <input
+                        type="text"
+                        value={formIndoorSerial}
+                        onChange={(e) => {
+                          setFormIndoorSerial(e.target.value);
+                          setFormSerialNo(e.target.value);
+                        }}
+                        placeholder="e.g. IDU-DKN-98124"
+                        className="w-full font-mono text-xs px-3 py-2 border border-blue-300 dark:border-blue-800 bg-white dark:bg-slate-800 text-slate-900 dark:text-white rounded-xl focus:ring-2 focus:ring-blue-500 outline-none"
+                      />
+                    </div>
+
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="block font-bold text-indigo-700 dark:text-indigo-300 text-xs">
+                          Outdoor Unit Serial (ODU):
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setScannerTargetField({ target: 'formOutdoorSerial', label: 'Outdoor Serial (ODU)' });
+                            setIsScannerOpen(true);
+                          }}
+                          className="text-[11px] font-bold text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1 cursor-pointer"
+                        >
+                          <Camera className="w-3 h-3" />
+                          <span>Scan ODU</span>
+                        </button>
+                      </div>
+                      <input
+                        type="text"
+                        value={formOutdoorSerial}
+                        onChange={(e) => setFormOutdoorSerial(e.target.value)}
+                        placeholder="e.g. ODU-DKN-98125"
+                        className="w-full font-mono text-xs px-3 py-2 border border-indigo-300 dark:border-indigo-800 bg-white dark:bg-slate-800 text-slate-900 dark:text-white rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
+                      />
+                    </div>
+                  </div>
+                ) : (
+                  /* Multi-Unit AC Serial Batch Box (IDU & ODU per unit) */
+                  <div className="p-3 bg-blue-50/40 dark:bg-blue-950/20 rounded-2xl border border-blue-200 dark:border-blue-900/40 space-y-3">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-blue-200 dark:border-blue-900/40">
+                      <div className="flex items-center gap-2">
+                        <Layers className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+                        <span className="font-extrabold text-slate-900 dark:text-white text-xs">
+                          AC Serials for {formQuantity} Units (Indoor IDU &amp; Outdoor ODU)
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const idus = generateSequentialSerials(formBrand, `${formModelNo}-IDU`, formQuantity);
+                          const odus = generateSequentialSerials(formBrand, `${formModelNo}-ODU`, formQuantity);
+                          setFormIndoorSerials(idus);
+                          setFormOutdoorSerials(odus);
+                          setFormSerialNumbers(idus);
+                        }}
+                        className="px-2.5 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-[10px] font-bold flex items-center gap-1 shadow-xs transition-colors"
+                      >
+                        <Zap className="w-3 h-3" />
+                        ⚡ Auto-Generate All IDU/ODU
+                      </button>
+                    </div>
+
+                    <div className="max-h-56 overflow-y-auto pr-1 space-y-2">
+                      {Array.from({ length: formQuantity }).map((_, idx) => (
+                        <div key={idx} className="p-2 bg-white dark:bg-slate-900 rounded-xl border border-blue-100 dark:border-blue-900/50 space-y-1.5">
+                          <span className="text-[10px] font-black text-blue-700 dark:text-blue-300">
+                            Unit #{idx + 1}
+                          </span>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                            <div className="flex items-center gap-1.5">
+                              <input
+                                type="text"
+                                value={formIndoorSerials[idx] || ''}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  setFormIndoorSerials((prev) => {
+                                    const next = [...prev];
+                                    next[idx] = val;
+                                    return next;
+                                  });
+                                }}
+                                placeholder={`Indoor SN (IDU) #${idx + 1}`}
+                                className="flex-1 font-mono text-[11px] px-2.5 py-1.5 border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 rounded-lg outline-none"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setScannerTargetField({ target: 'formMultiIndoor', index: idx, label: `Unit #${idx + 1} Indoor SN` });
+                                  setIsScannerOpen(true);
+                                }}
+                                className="p-1.5 text-blue-600 hover:bg-blue-100 dark:hover:bg-blue-900/50 rounded-lg"
+                                title="Scan IDU Barcode"
+                              >
+                                <Camera className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+
+                            <div className="flex items-center gap-1.5">
+                              <input
+                                type="text"
+                                value={formOutdoorSerials[idx] || ''}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  setFormOutdoorSerials((prev) => {
+                                    const next = [...prev];
+                                    next[idx] = val;
+                                    return next;
+                                  });
+                                }}
+                                placeholder={`Outdoor SN (ODU) #${idx + 1}`}
+                                className="flex-1 font-mono text-[11px] px-2.5 py-1.5 border border-slate-300 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 rounded-lg outline-none"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setScannerTargetField({ target: 'formMultiOutdoor', index: idx, label: `Unit #${idx + 1} Outdoor SN` });
+                                  setIsScannerOpen(true);
+                                }}
+                                className="p-1.5 text-indigo-600 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 rounded-lg"
+                                title="Scan ODU Barcode"
+                              >
+                                <Camera className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )
+              ) : formQuantity === 1 ? (
                 <div>
                   <div className="flex items-center justify-between mb-1">
                     <label className="block font-bold text-slate-700 dark:text-slate-300">
                       Device Barcode / Serial No:
                     </label>
-                    <button
-                      type="button"
-                      onClick={handleAutoGenerateFormSerials}
-                      className="text-[11px] font-bold text-red-600 dark:text-red-400 hover:underline flex items-center gap-1"
-                    >
-                      <Zap className="w-3 h-3" />
-                      Auto-generate
-                    </button>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setScannerTargetField({ target: 'formSerialNo', label: 'Device Serial No' });
+                          setIsScannerOpen(true);
+                        }}
+                        className="text-[11px] font-bold text-red-600 dark:text-red-400 hover:underline flex items-center gap-1 cursor-pointer"
+                      >
+                        <Camera className="w-3 h-3" />
+                        <span>Scan Barcode</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handleAutoGenerateFormSerials}
+                        className="text-[11px] font-bold text-slate-500 hover:underline flex items-center gap-1"
+                      >
+                        <Zap className="w-3 h-3" />
+                        Auto-generate
+                      </button>
+                    </div>
                   </div>
                   <input
                     type="text"
@@ -1489,7 +2165,7 @@ export const InventoryGodown: React.FC<InventoryGodownProps> = ({ onBillItem }) 
                   />
                 </div>
               ) : (
-                /* Multi-Unit Serial Number Batch Box */
+                /* Multi-Unit Serial Number Batch Box (Non-AC) */
                 <div className="p-3 bg-slate-50 dark:bg-slate-950/60 rounded-2xl border border-slate-200 dark:border-slate-800 space-y-3">
                   <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-slate-200 dark:border-slate-800">
                     <div className="flex items-center gap-2">
@@ -1565,6 +2241,17 @@ export const InventoryGodown: React.FC<InventoryGodownProps> = ({ onBillItem }) 
                           placeholder={`Serial No for Unit #${idx + 1}`}
                           className="flex-1 font-mono text-[11px] px-2.5 py-1.5 border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white rounded-lg focus:ring-1 focus:ring-red-500 outline-none"
                         />
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setScannerTargetField({ target: 'formMultiSerial', index: idx, label: `Unit #${idx + 1} Serial` });
+                            setIsScannerOpen(true);
+                          }}
+                          className="p-1.5 text-slate-500 hover:text-red-600 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg"
+                          title="Scan Serial Barcode"
+                        >
+                          <Camera className="w-3.5 h-3.5" />
+                        </button>
                       </div>
                     ))}
                   </div>
@@ -1841,44 +2528,204 @@ export const InventoryGodown: React.FC<InventoryGodownProps> = ({ onBillItem }) 
               </div>
 
               <div>
-                <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
-                  Model Number / Series:
-                </label>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block font-bold text-slate-700 dark:text-slate-300">
+                    {editType.trim().toUpperCase() === 'AC' ? 'Set Model Number / Series:' : 'Model Number / Series:'}
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setScannerTargetField({ target: 'editModelNo', label: 'Model Number' });
+                      setIsScannerOpen(true);
+                    }}
+                    className="text-[11px] font-bold text-red-600 dark:text-red-400 hover:underline flex items-center gap-1 cursor-pointer"
+                  >
+                    <Camera className="w-3 h-3" />
+                    <span>Scan Model</span>
+                  </button>
+                </div>
                 <input
                   type="text"
                   required
                   value={editModelNo}
                   onChange={(e) => setEditModelNo(e.target.value)}
-                  className="w-full px-3 py-2 border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white rounded-xl focus:ring-2 focus:ring-red-500 outline-none"
+                  className="w-full px-3 py-2 border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white rounded-xl focus:ring-2 focus:ring-red-500 outline-none font-mono"
                 />
               </div>
 
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
-                    Device Barcode / Serial No:
-                  </label>
-                  <input
-                    type="text"
-                    value={editSerialNo}
-                    onChange={(e) => setEditSerialNo(e.target.value)}
-                    className="w-full font-mono px-3 py-2 border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white rounded-xl focus:ring-2 focus:ring-red-500 outline-none"
-                  />
-                </div>
+              {/* If AC, show dedicated Indoor & Outdoor Model Numbers */}
+              {editType.trim().toUpperCase() === 'AC' && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-3 bg-blue-50/50 dark:bg-blue-950/20 rounded-2xl border border-blue-200/80 dark:border-blue-900/40">
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="block font-bold text-blue-700 dark:text-blue-300 text-xs">
+                        Indoor Model (IDU):
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setScannerTargetField({ target: 'editIndoorModelNo', label: 'Indoor Model (IDU)' });
+                          setIsScannerOpen(true);
+                        }}
+                        className="text-[11px] font-bold text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1 cursor-pointer"
+                        title="Scan IDU Model"
+                      >
+                        <Camera className="w-3 h-3" />
+                        <span>Scan IDU Model</span>
+                      </button>
+                    </div>
+                    <input
+                      type="text"
+                      value={editIndoorModelNo}
+                      onChange={(e) => setEditIndoorModelNo(e.target.value)}
+                      placeholder="e.g. FTKF50TV16U-IDU"
+                      className="w-full font-mono text-xs px-3 py-2 border border-blue-300 dark:border-blue-800 bg-white dark:bg-slate-800 text-slate-900 dark:text-white rounded-xl focus:ring-2 focus:ring-blue-500 outline-none"
+                    />
+                  </div>
 
-                <div>
-                  <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
-                    Selling Price (₹):
-                  </label>
-                  <input
-                    type="number"
-                    min={0}
-                    value={editPrice}
-                    onChange={(e) => setEditPrice(Number(e.target.value))}
-                    className="w-full font-bold px-3 py-2 border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white rounded-xl focus:ring-2 focus:ring-red-500 outline-none"
-                  />
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="block font-bold text-indigo-700 dark:text-indigo-300 text-xs">
+                        Outdoor Model (ODU):
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setScannerTargetField({ target: 'editOutdoorModelNo', label: 'Outdoor Model (ODU)' });
+                          setIsScannerOpen(true);
+                        }}
+                        className="text-[11px] font-bold text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1 cursor-pointer"
+                        title="Scan ODU Model"
+                      >
+                        <Camera className="w-3 h-3" />
+                        <span>Scan ODU Model</span>
+                      </button>
+                    </div>
+                    <input
+                      type="text"
+                      value={editOutdoorModelNo}
+                      onChange={(e) => setEditOutdoorModelNo(e.target.value)}
+                      placeholder="e.g. RKF50TV16U-ODU"
+                      className="w-full font-mono text-xs px-3 py-2 border border-indigo-300 dark:border-indigo-800 bg-white dark:bg-slate-800 text-slate-900 dark:text-white rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
+                    />
+                  </div>
                 </div>
-              </div>
+              )}
+
+              {/* Serials & Pricing: If AC, strictly show Indoor and Outdoor Serial only */}
+              {editType.trim().toUpperCase() === 'AC' ? (
+                <>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-3 bg-blue-50/50 dark:bg-blue-950/20 rounded-2xl border border-blue-200 dark:border-blue-900/40">
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="block font-bold text-blue-700 dark:text-blue-300 text-xs">
+                          Indoor Unit Serial (IDU):
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setScannerTargetField({ target: 'editIndoorSerial', label: 'Indoor Serial (IDU)' });
+                            setIsScannerOpen(true);
+                          }}
+                          className="text-[11px] font-bold text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1 cursor-pointer"
+                        >
+                          <Camera className="w-3 h-3" />
+                          <span>Scan IDU</span>
+                        </button>
+                      </div>
+                      <input
+                        type="text"
+                        value={editIndoorSerial}
+                        onChange={(e) => {
+                          setEditIndoorSerial(e.target.value);
+                          setEditSerialNo(e.target.value);
+                        }}
+                        placeholder="e.g. IDU-DKN-98124"
+                        className="w-full font-mono text-xs px-3 py-2 border border-blue-300 dark:border-blue-800 bg-white dark:bg-slate-800 text-slate-900 dark:text-white rounded-xl focus:ring-2 focus:ring-blue-500 outline-none"
+                      />
+                    </div>
+
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="block font-bold text-indigo-700 dark:text-indigo-300 text-xs">
+                          Outdoor Unit Serial (ODU):
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setScannerTargetField({ target: 'editOutdoorSerial', label: 'Outdoor Serial (ODU)' });
+                            setIsScannerOpen(true);
+                          }}
+                          className="text-[11px] font-bold text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1 cursor-pointer"
+                        >
+                          <Camera className="w-3 h-3" />
+                          <span>Scan ODU</span>
+                        </button>
+                      </div>
+                      <input
+                        type="text"
+                        value={editOutdoorSerial}
+                        onChange={(e) => setEditOutdoorSerial(e.target.value)}
+                        placeholder="e.g. ODU-DKN-98125"
+                        className="w-full font-mono text-xs px-3 py-2 border border-indigo-300 dark:border-indigo-800 bg-white dark:bg-slate-800 text-slate-900 dark:text-white rounded-xl focus:ring-2 focus:ring-indigo-500 outline-none"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
+                      Selling Price (₹):
+                    </label>
+                    <input
+                      type="number"
+                      min={0}
+                      value={editPrice}
+                      onChange={(e) => setEditPrice(Number(e.target.value))}
+                      className="w-full font-bold px-3 py-2 border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white rounded-xl focus:ring-2 focus:ring-red-500 outline-none"
+                    />
+                  </div>
+                </>
+              ) : (
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="block font-bold text-slate-700 dark:text-slate-300">
+                        Device Barcode / Serial No:
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setScannerTargetField({ target: 'editSerialNo', label: 'Device Serial No' });
+                          setIsScannerOpen(true);
+                        }}
+                        className="text-[11px] font-bold text-red-600 dark:text-red-400 hover:underline flex items-center gap-1 cursor-pointer"
+                      >
+                        <Camera className="w-3 h-3" />
+                        <span>Scan</span>
+                      </button>
+                    </div>
+                    <input
+                      type="text"
+                      value={editSerialNo}
+                      onChange={(e) => setEditSerialNo(e.target.value)}
+                      className="w-full font-mono px-3 py-2 border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white rounded-xl focus:ring-2 focus:ring-red-500 outline-none"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block font-bold text-slate-700 dark:text-slate-300 mb-1">
+                      Selling Price (₹):
+                    </label>
+                    <input
+                      type="number"
+                      min={0}
+                      value={editPrice}
+                      onChange={(e) => setEditPrice(Number(e.target.value))}
+                      className="w-full font-bold px-3 py-2 border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white rounded-xl focus:ring-2 focus:ring-red-500 outline-none"
+                    />
+                  </div>
+                </div>
+              )}
 
               {/* Website Stock ID */}
               <div className="p-3 bg-red-50/60 dark:bg-red-950/30 rounded-2xl border border-red-100 dark:border-red-900/40 space-y-2">
@@ -2038,6 +2885,23 @@ export const InventoryGodown: React.FC<InventoryGodownProps> = ({ onBillItem }) 
       <ProductQrLabelModal
         item={selectedItemForLabel}
         onClose={() => setSelectedItemForLabel(null)}
+        onOpenBarcode={() => {
+          setSelectedItemForBarcode(selectedItemForLabel);
+          setIsBarcodeModalOpen(true);
+        }}
+      />
+
+      {/* Product Internal QR Code Studio & Multi-Print Modal */}
+      <ProductBarcodeModal
+        isOpen={isBarcodeModalOpen}
+        item={selectedItemForBarcode}
+        allItems={inventory}
+        initialSelectedIds={selectedBarcodeBatchIds}
+        onClose={() => {
+          setIsBarcodeModalOpen(false);
+          setSelectedItemForBarcode(null);
+          setSelectedBarcodeBatchIds(undefined);
+        }}
       />
     </div>
   );

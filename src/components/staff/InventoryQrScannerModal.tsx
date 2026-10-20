@@ -18,11 +18,14 @@ import {
   Check,
   RefreshCw,
   Sparkles,
-  ExternalLink,
   Truck,
+  QrCode,
+  Tag,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
-import jsQR from 'jsqr';
 import { InventoryItem, Shipment, Invoice } from '../../types';
+import { scanCanvasForCodes, scanImageForCodes } from '../../utils/scannerHelper';
 
 interface InventoryQrScannerModalProps {
   isOpen: boolean;
@@ -30,20 +33,30 @@ interface InventoryQrScannerModalProps {
   inventory: InventoryItem[];
   shipments?: Shipment[];
   invoices?: Invoice[];
+  scanTargetPrompt?: string; // Optional prompt when scanning for a specific input field
+  onScannedValueExtracted?: (value: string, role?: string) => void;
   onOpenAddItemWithData: (data: {
     name?: string;
     modelNo?: string;
+    indoorModelNo?: string;
+    outdoorModelNo?: string;
     type?: string;
     brand?: string;
     serialNo?: string;
+    indoorUnitSerial?: string;
+    outdoorUnitSerial?: string;
     price?: number;
   }) => void;
   onQuickAddItemDirect?: (data: {
     name: string;
     modelNo: string;
+    indoorModelNo?: string;
+    outdoorModelNo?: string;
     type: string;
     brand: string;
     serialNo: string;
+    indoorUnitSerial?: string;
+    outdoorUnitSerial?: string;
     sellingPrice: number;
   }) => Promise<void>;
   onEditItem?: (item: InventoryItem) => void;
@@ -71,12 +84,14 @@ interface InventoryQrScannerModalProps {
 
 interface ParsedQrResult {
   raw: string;
+  stockId?: string;
   name?: string;
   modelNo?: string;
   brand?: string;
   type?: string;
   serialNo?: string;
   price?: number;
+  format?: string;
 }
 
 export const InventoryQrScannerModal: React.FC<InventoryQrScannerModalProps> = ({
@@ -93,6 +108,8 @@ export const InventoryQrScannerModal: React.FC<InventoryQrScannerModalProps> = (
   onToggleItemSold,
   onUpdateShipmentStatus,
   onAddShipmentTrackingUpdate,
+  scanTargetPrompt,
+  onScannedValueExtracted,
 }) => {
   const [cameraActive, setCameraActive] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
@@ -101,11 +118,14 @@ export const InventoryQrScannerModal: React.FC<InventoryQrScannerModalProps> = (
   const [torchOn, setTorchOn] = useState(false);
   const [torchSupported, setTorchSupported] = useState(false);
 
-  // Scanned status
+  // Scanned status & result
   const [scannedResult, setScannedResult] = useState<ParsedQrResult | null>(null);
-  const [matchedItem, setMatchedItem] = useState<InventoryItem | null>(null);
-  const [matchedItems, setMatchedItems] = useState<InventoryItem[]>([]);
+  const [matchMode, setMatchMode] = useState<'SPECIFIC_UNIT' | 'MODEL_GROUP' | 'DELIVERY' | 'UNREGISTERED'>('SPECIFIC_UNIT');
+  const [specificUnit, setSpecificUnit] = useState<InventoryItem | null>(null);
+  const [modelGroupUnits, setModelGroupUnits] = useState<InventoryItem[]>([]);
   const [archivedMatchCount, setArchivedMatchCount] = useState<number>(0);
+  const [showOtherModelUnits, setShowOtherModelUnits] = useState(false);
+
   const [matchedOrder, setMatchedOrder] = useState<{
     shipment?: Shipment;
     invoice?: Invoice;
@@ -113,10 +133,8 @@ export const InventoryQrScannerModal: React.FC<InventoryQrScannerModalProps> = (
     matchedModel?: string;
     matchedReason?: string;
   } | null>(null);
-  const [isProcessing, setIsProcessing] = useState(false);
-  const [copiedText, setCopiedText] = useState<string | null>(null);
 
-  // Order status updating
+  const [isProcessing, setIsProcessing] = useState(false);
   const [isUpdatingOrder, setIsUpdatingOrder] = useState(false);
   const [orderUpdateFeedback, setOrderUpdateFeedback] = useState<string | null>(null);
 
@@ -128,7 +146,14 @@ export const InventoryQrScannerModal: React.FC<InventoryQrScannerModalProps> = (
   // Editable fields for unregistered item quick-add
   const [unregisteredBrand, setUnregisteredBrand] = useState('Daikin');
   const [unregisteredModel, setUnregisteredModel] = useState('');
+  const [unregisteredIndoorModel, setUnregisteredIndoorModel] = useState('');
+  const [unregisteredOutdoorModel, setUnregisteredOutdoorModel] = useState('');
   const [unregisteredPrice, setUnregisteredPrice] = useState<number>(45000);
+  const [unregisteredType, setUnregisteredType] = useState('AC');
+  const [unregisteredRole, setUnregisteredRole] = useState<'serialNo' | 'modelNo' | 'indoorModelNo' | 'outdoorModelNo' | 'indoorUnitSerial' | 'outdoorUnitSerial'>('serialNo');
+  const [unregisteredSerial, setUnregisteredSerial] = useState('');
+  const [unregisteredIndoorSerial, setUnregisteredIndoorSerial] = useState('');
+  const [unregisteredOutdoorSerial, setUnregisteredOutdoorSerial] = useState('');
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -146,8 +171,8 @@ export const InventoryQrScannerModal: React.FC<InventoryQrScannerModalProps> = (
       const gain = ctx.createGain();
 
       osc.type = 'sine';
-      osc.frequency.setValueAtTime(880, ctx.currentTime); // A5
-      osc.frequency.exponentialRampToValueAtTime(1320, ctx.currentTime + 0.12); // E6
+      osc.frequency.setValueAtTime(880, ctx.currentTime);
+      osc.frequency.exponentialRampToValueAtTime(1320, ctx.currentTime + 0.12);
 
       gain.gain.setValueAtTime(0.15, ctx.currentTime);
       gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.12);
@@ -166,16 +191,17 @@ export const InventoryQrScannerModal: React.FC<InventoryQrScannerModalProps> = (
     }
   };
 
-  // Helper to parse QR text (supports JSON, Key-Value, URL or raw Serial/Model)
-  const parseQrText = (rawText: string): ParsedQrResult => {
+  // Helper to parse QR text or barcode text (supports JSON, Key-Value, URL or raw Serial/Model/StockId)
+  const parseCodeText = (rawText: string, format?: string): ParsedQrResult => {
     const raw = rawText.trim();
-    let result: ParsedQrResult = { raw };
+    let result: ParsedQrResult = { raw, format };
 
     // 1. Try JSON
     if ((raw.startsWith('{') && raw.endsWith('}')) || (raw.startsWith('[') && raw.endsWith(']'))) {
       try {
         const obj = JSON.parse(raw);
         if (typeof obj === 'object' && obj !== null) {
+          result.stockId = obj.stockId || obj.stock_id || obj.stockID;
           result.name = obj.name || obj.productName || obj.title;
           result.modelNo = obj.modelNo || obj.model || obj.modelNumber || obj.itemCode;
           result.brand = obj.brand || obj.manufacturer || obj.make;
@@ -189,7 +215,7 @@ export const InventoryQrScannerModal: React.FC<InventoryQrScannerModalProps> = (
       }
     }
 
-    // 2. Try Key-Value lines (e.g. MODEL: XYZ, SN: 123)
+    // 2. Try Key-Value lines (e.g. STOCK_ID: XYZ, MODEL: ABC, SN: 123)
     const lines = raw.split(/[\r\n;,]+/);
     let matchedLines = false;
     lines.forEach((line) => {
@@ -197,7 +223,10 @@ export const InventoryQrScannerModal: React.FC<InventoryQrScannerModalProps> = (
       if (parts.length >= 2) {
         const key = parts[0].trim().toUpperCase();
         const val = parts.slice(1).join(':').trim();
-        if (['MODEL', 'MODELNO', 'MODEL_NO', 'MODEL NUMBER'].includes(key)) {
+        if (['STOCKID', 'STOCK_ID', 'STOCK', 'SKU'].includes(key)) {
+          result.stockId = val;
+          matchedLines = true;
+        } else if (['MODEL', 'MODELNO', 'MODEL_NO', 'MODEL NUMBER'].includes(key)) {
           result.modelNo = val;
           matchedLines = true;
         } else if (['NAME', 'PRODUCT', 'ITEM', 'DESCRIPTION'].includes(key)) {
@@ -227,7 +256,9 @@ export const InventoryQrScannerModal: React.FC<InventoryQrScannerModalProps> = (
         const url = new URL(raw);
         const sn = url.searchParams.get('sn') || url.searchParams.get('serial') || url.searchParams.get('item');
         const model = url.searchParams.get('model') || url.searchParams.get('m');
-        if (sn || model) {
+        const stId = url.searchParams.get('stock') || url.searchParams.get('stockId');
+        if (sn || model || stId) {
+          result.stockId = stId || undefined;
           result.serialNo = sn || undefined;
           result.modelNo = model || undefined;
           return result;
@@ -238,53 +269,16 @@ export const InventoryQrScannerModal: React.FC<InventoryQrScannerModalProps> = (
     }
 
     // 4. Raw string heuristics
-    if (/^SN[-_:]/i.test(raw)) {
+    if (/^LAK[-_]/i.test(raw) || /^STOCK[-_]/i.test(raw)) {
+      result.stockId = raw;
+    } else if (/^SN[-_:]/i.test(raw)) {
       result.serialNo = raw;
-    } else if (/^[A-Z0-9]{6,16}$/i.test(raw)) {
-      // Looks like a model number or serial number
+    } else {
       result.serialNo = raw;
       result.modelNo = raw;
-    } else {
-      result.name = raw;
     }
 
     return result;
-  };
-
-  // Check if parsed QR matches existing items in inventory (returns ALL matching products in stock)
-  // Filters out items that left the store and are marked delivered & installed / archived
-  const findMatchingItems = (parsed: ParsedQrResult): InventoryItem[] => {
-    const rawClean = parsed.raw.toLowerCase().trim();
-    const snClean = (parsed.serialNo || '').toLowerCase().trim();
-    const modelClean = (parsed.modelNo || '').toLowerCase().trim();
-
-    return inventory.filter((item) => {
-      // Products that left store and are marked delivered & installed are archived and do NOT show in scanning
-      if (item.isArchived || item.status === 'ARCHIVED') return false;
-
-      const rawMatch = item.id.toLowerCase() === rawClean;
-      const stockIdMatch = item.stockId && item.stockId.toLowerCase() === rawClean;
-      const snMatch = item.serialNo && (item.serialNo.toLowerCase() === rawClean || (snClean && item.serialNo.toLowerCase() === snClean));
-      const modelMatch = item.modelNo && (item.modelNo.toLowerCase() === rawClean || (modelClean && item.modelNo.toLowerCase() === modelClean));
-      const barcodeMatch = item.barcode && (item.barcode.toLowerCase() === rawClean || (snClean && item.barcode.toLowerCase() === snClean));
-
-      return rawMatch || stockIdMatch || snMatch || modelMatch || barcodeMatch;
-    });
-  };
-
-  // Count items matching this barcode that have left the store and are archived
-  const countArchivedMatches = (parsed: ParsedQrResult): number => {
-    const rawClean = parsed.raw.toLowerCase().trim();
-    const snClean = (parsed.serialNo || '').toLowerCase().trim();
-    const modelClean = (parsed.modelNo || '').toLowerCase().trim();
-
-    return inventory.filter((item) => {
-      if (!item.isArchived && item.status !== 'ARCHIVED') return false;
-      const snMatch = item.serialNo && (item.serialNo.toLowerCase() === rawClean || (snClean && item.serialNo.toLowerCase() === snClean));
-      const modelMatch = item.modelNo && (item.modelNo.toLowerCase() === rawClean || (modelClean && item.modelNo.toLowerCase() === modelClean));
-      const stockIdMatch = item.stockId && item.stockId.toLowerCase() === rawClean;
-      return snMatch || modelMatch || stockIdMatch;
-    }).length;
   };
 
   // Check if parsed QR matches any Delivery (Shipment) or Invoice in the system
@@ -367,31 +361,195 @@ export const InventoryQrScannerModal: React.FC<InventoryQrScannerModalProps> = (
     return null;
   };
 
+  // BUG 3 IMPLEMENTATION:
+  // "when a value is given it checks if its a sr number which it show that specific one or model number which it shows all the stock id of that in store and that only in store stock id are showed when using a similar thing value"
+  const processScannedValue = (parsed: ParsedQrResult) => {
+    // 1. FILTER ACTIVE IN-STORE ITEMS ONLY (archived / installed units MUST NEVER be included in in-store stock list)
+    const inStoreItems = inventory.filter((it) => !it.isArchived && it.status !== 'ARCHIVED');
+
+    const rawClean = parsed.raw.toLowerCase().trim();
+    const snClean = (parsed.serialNo || '').toLowerCase().trim();
+    const stockIdClean = (parsed.stockId || '').toLowerCase().trim();
+    const modelClean = (parsed.modelNo || '').toLowerCase().trim();
+
+    // Check count of archived items matching this code for an informative footnote
+    const archivedCount = inventory.filter((item) => {
+      if (!item.isArchived && item.status !== 'ARCHIVED') return false;
+      const sMatch = item.serialNo && (item.serialNo.toLowerCase() === rawClean || (snClean && item.serialNo.toLowerCase() === snClean));
+      const mMatch = item.modelNo && (item.modelNo.toLowerCase() === rawClean || (modelClean && item.modelNo.toLowerCase() === modelClean));
+      const stMatch = item.stockId && (item.stockId.toLowerCase() === rawClean || (stockIdClean && item.stockId.toLowerCase() === stockIdClean));
+      return sMatch || mMatch || stMatch;
+    }).length;
+    setArchivedMatchCount(archivedCount);
+
+    // STEP A: CHECK FOR EXACT SPECIFIC UNIT (by Stock ID, Serial No, Barcode, or ID)
+    let exactUnitMatch: InventoryItem | undefined;
+
+    // Check by stockId first
+    if (stockIdClean) {
+      exactUnitMatch = inStoreItems.find((it) => it.stockId && it.stockId.toLowerCase().trim() === stockIdClean);
+    }
+    if (!exactUnitMatch) {
+      exactUnitMatch = inStoreItems.find((it) => it.stockId && it.stockId.toLowerCase().trim() === rawClean);
+    }
+
+    // Check by serial number
+    if (!exactUnitMatch && snClean) {
+      exactUnitMatch = inStoreItems.find((it) => it.serialNo && it.serialNo.toLowerCase().trim() === snClean);
+    }
+    if (!exactUnitMatch) {
+      exactUnitMatch = inStoreItems.find((it) => it.serialNo && it.serialNo.toLowerCase().trim() === rawClean);
+    }
+
+    // Check by indoor unit serial number (AC IDU)
+    if (!exactUnitMatch) {
+      exactUnitMatch = inStoreItems.find(
+        (it) =>
+          it.indoorUnitSerial &&
+          (it.indoorUnitSerial.toLowerCase().trim() === rawClean ||
+            (snClean && it.indoorUnitSerial.toLowerCase().trim() === snClean))
+      );
+    }
+
+    // Check by outdoor unit serial number (AC ODU)
+    if (!exactUnitMatch) {
+      exactUnitMatch = inStoreItems.find(
+        (it) =>
+          it.outdoorUnitSerial &&
+          (it.outdoorUnitSerial.toLowerCase().trim() === rawClean ||
+            (snClean && it.outdoorUnitSerial.toLowerCase().trim() === snClean))
+      );
+    }
+
+    // Check by unique barcode or database ID
+    if (!exactUnitMatch) {
+      exactUnitMatch = inStoreItems.find(
+        (it) => (it.barcode && it.barcode.toLowerCase().trim() === rawClean) || it.id.toLowerCase() === rawClean
+      );
+    }
+
+    // IF EXACT UNIT MATCH FOUND: SHOW THAT SPECIFIC ONE
+    if (exactUnitMatch) {
+      setMatchMode('SPECIFIC_UNIT');
+      setSpecificUnit(exactUnitMatch);
+
+      // Find any other in-store units with same model number
+      const siblings = inStoreItems.filter(
+        (it) =>
+          it.id !== exactUnitMatch!.id &&
+          it.modelNo &&
+          exactUnitMatch!.modelNo &&
+          it.modelNo.toLowerCase().trim() === exactUnitMatch!.modelNo.toLowerCase().trim()
+      );
+      setModelGroupUnits(siblings);
+      setShowOtherModelUnits(false);
+      setMatchedOrder(null);
+      return;
+    }
+
+    // STEP B: CHECK FOR MODEL NUMBER (INCLUDING INDOOR & OUTDOOR MODELS)
+    const targetModel = modelClean || rawClean;
+    const modelUnits = inStoreItems.filter((it) => {
+      const m = (it.modelNo || '').toLowerCase().trim();
+      const iduM = (it.indoorModelNo || '').toLowerCase().trim();
+      const oduM = (it.outdoorModelNo || '').toLowerCase().trim();
+
+      const mMatch = m && (m === targetModel || m.includes(targetModel) || targetModel.includes(m));
+      const iduMatch = iduM && (iduM === targetModel || iduM.includes(targetModel) || targetModel.includes(iduM));
+      const oduMatch = oduM && (oduM === targetModel || oduM.includes(targetModel) || targetModel.includes(oduM));
+
+      return mMatch || iduMatch || oduMatch;
+    });
+
+    if (modelUnits.length > 0) {
+      setMatchMode('MODEL_GROUP');
+      setSpecificUnit(null);
+      setModelGroupUnits(modelUnits);
+      setShowOtherModelUnits(false);
+      setMatchedOrder(null);
+      return;
+    }
+
+    // STEP B2: CHECK FOR SIMILAR THING VALUE (e.g. Brand, Product Name, or Partial Serial/Stock ID/Models)
+    // CRITICAL: Shows all the stock IDs of that in store, and ONLY in-store stock IDs are shown
+    const similarUnits = inStoreItems.filter((it) => {
+      const q = rawClean;
+      const nameMatch = it.name && it.name.toLowerCase().includes(q);
+      const brandMatch = it.brand && it.brand.toLowerCase().includes(q);
+      const snPartial = it.serialNo && it.serialNo.toLowerCase().includes(q);
+      const stockIdPartial = it.stockId && it.stockId.toLowerCase().includes(q);
+      const iduModelPartial = it.indoorModelNo && it.indoorModelNo.toLowerCase().includes(q);
+      const oduModelPartial = it.outdoorModelNo && it.outdoorModelNo.toLowerCase().includes(q);
+      return nameMatch || brandMatch || snPartial || stockIdPartial || iduModelPartial || oduModelPartial;
+    });
+
+    if (similarUnits.length === 1 && (similarUnits[0].serialNo?.toLowerCase().includes(rawClean) || similarUnits[0].stockId?.toLowerCase().includes(rawClean))) {
+      // If a single unit matches this serial number / stock ID value, show that specific one
+      setMatchMode('SPECIFIC_UNIT');
+      setSpecificUnit(similarUnits[0]);
+      const siblings = inStoreItems.filter(
+        (it) =>
+          it.id !== similarUnits[0].id &&
+          it.modelNo &&
+          similarUnits[0].modelNo &&
+          it.modelNo.toLowerCase().trim() === similarUnits[0].modelNo.toLowerCase().trim()
+      );
+      setModelGroupUnits(siblings);
+      setShowOtherModelUnits(false);
+      setMatchedOrder(null);
+      return;
+    } else if (similarUnits.length > 0) {
+      // Multiple in-store units match this similar value -> Show all their in-store Stock IDs
+      setMatchMode('MODEL_GROUP');
+      setSpecificUnit(null);
+      setModelGroupUnits(similarUnits);
+      setShowOtherModelUnits(false);
+      setMatchedOrder(null);
+      return;
+    }
+
+    // STEP C: CHECK FOR DELIVERY / CUSTOMER ORDER MATCH
+    const orderMatch = findMatchingDeliveryOrder(parsed);
+    if (orderMatch) {
+      setMatchMode('DELIVERY');
+      setMatchedOrder(orderMatch);
+      setSpecificUnit(null);
+      setModelGroupUnits([]);
+      return;
+    }
+
+    // STEP D: UNREGISTERED / NOT FOUND
+    setMatchMode('UNREGISTERED');
+    setSpecificUnit(null);
+    setModelGroupUnits([]);
+    setMatchedOrder(null);
+
+    // Pre-seed quick add form
+    if (parsed.brand) setUnregisteredBrand(parsed.brand);
+    if (parsed.modelNo) setUnregisteredModel(parsed.modelNo);
+    if (parsed.price) setUnregisteredPrice(parsed.price);
+  };
+
   // Handle a successfully scanned code
-  const handleDecodedCode = (decodedString: string) => {
+  const handleDecodedCode = (decodedString: string, format?: string) => {
     if (!decodedString) return;
     playBeep();
     setIsProcessing(true);
     setCameraActive(false);
     stopCameraStream();
 
-    const parsed = parseQrText(decodedString);
-    const foundList = findMatchingItems(parsed);
-    const orderMatch = findMatchingDeliveryOrder(parsed);
-    const archivedCount = countArchivedMatches(parsed);
+    // If modal was opened specifically to scan for an input field
+    if (onScannedValueExtracted && scanTargetPrompt) {
+      onScannedValueExtracted(decodedString.trim());
+      onClose();
+      setIsProcessing(false);
+      return;
+    }
 
+    const parsed = parseCodeText(decodedString, format);
     setScannedResult(parsed);
-    setMatchedItems(foundList);
-    setMatchedItem(foundList[0] || null);
-    setArchivedMatchCount(archivedCount);
-    setMatchedOrder(orderMatch);
+    processScannedValue(parsed);
     setOrderUpdateFeedback(null);
-
-    // Seed unregistered quick add form
-    if (parsed.brand) setUnregisteredBrand(parsed.brand);
-    if (parsed.modelNo) setUnregisteredModel(parsed.modelNo);
-    if (parsed.price) setUnregisteredPrice(parsed.price);
-
     setIsProcessing(false);
   };
 
@@ -418,24 +576,11 @@ export const InventoryQrScannerModal: React.FC<InventoryQrScannerModalProps> = (
       if (onAddShipmentTrackingUpdate) {
         await onAddShipmentTrackingUpdate(
           shId,
-          `Arrived at Lakhi Store verified via Barcode/QR Scanner (SN: ${serialLabel})`
+          `Arrived at Lakhi Store verified via Scanner (SN: ${serialLabel})`
         );
       }
 
-      // If not yet in store stock, automatically add it or make available
-      if (!matchedItem && onQuickAddItemDirect && scannedResult) {
-        await onQuickAddItemDirect({
-          name: scannedResult.name || `${scannedResult.brand || 'Daikin'} AC (From Delivery ${shId})`,
-          modelNo: scannedResult.modelNo || 'DELIVERY-UNIT',
-          type: scannedResult.type || 'AC',
-          brand: scannedResult.brand || 'Daikin',
-          serialNo: scannedResult.serialNo || scannedResult.raw,
-          sellingPrice: scannedResult.price || 45000,
-        });
-      }
-
       setOrderUpdateFeedback('✅ Marked as ARRIVED AT STORE! In-store stock & live tracking updated.');
-      // Refresh local matched order status
       setMatchedOrder((prev) =>
         prev
           ? {
@@ -471,7 +616,7 @@ export const InventoryQrScannerModal: React.FC<InventoryQrScannerModalProps> = (
           undefined,
           undefined,
           undefined,
-          `Delivered & verified via barcode scan (SN: ${serialLabel})`
+          `Delivered & verified via barcode/QR scan (SN: ${serialLabel})`
         );
       }
       if (onAddShipmentTrackingUpdate) {
@@ -505,7 +650,8 @@ export const InventoryQrScannerModal: React.FC<InventoryQrScannerModalProps> = (
   const startCamera = async () => {
     setCameraError(null);
     setScannedResult(null);
-    setMatchedItem(null);
+    setSpecificUnit(null);
+    setModelGroupUnits([]);
     setMatchedOrder(null);
     setOrderUpdateFeedback(null);
     setQuickAddSuccess(false);
@@ -513,7 +659,6 @@ export const InventoryQrScannerModal: React.FC<InventoryQrScannerModalProps> = (
     try {
       stopCameraStream();
 
-      // Check device cameras
       if (navigator.mediaDevices && navigator.mediaDevices.enumerateDevices) {
         const devices = await navigator.mediaDevices.enumerateDevices();
         const videoInputs = devices.filter((d) => d.kind === 'videoinput');
@@ -538,7 +683,6 @@ export const InventoryQrScannerModal: React.FC<InventoryQrScannerModalProps> = (
         await videoRef.current.play();
         setCameraActive(true);
 
-        // Check torch support
         const track = stream.getVideoTracks()[0];
         const capabilities: any = track.getCapabilities ? track.getCapabilities() : {};
         setTorchSupported(!!capabilities.torch);
@@ -551,7 +695,7 @@ export const InventoryQrScannerModal: React.FC<InventoryQrScannerModalProps> = (
       if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
         setCameraError('Camera access was denied. Please allow camera permissions in your browser or use the file upload / manual code fallback below.');
       } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
-        setCameraError('No camera found on this device. You can upload an image with a QR code or enter code manually.');
+        setCameraError('No camera found on this device. You can upload an image with a QR code/barcode or enter code manually.');
       } else {
         setCameraError('Unable to access device camera. Please check your browser permissions or use file upload.');
       }
@@ -571,27 +715,35 @@ export const InventoryQrScannerModal: React.FC<InventoryQrScannerModalProps> = (
     setTorchOn(false);
   };
 
-  // Continuous frame scanning loop using jsQR
+  // BUG 2 & 3 IMPLEMENTATION: Continuous scanning loop detecting BOTH 1D barcodes and 2D QR codes
   const startScanningLoop = () => {
-    const scan = () => {
+    let lastScanTime = 0;
+
+    const scan = async () => {
       if (!videoRef.current || !canvasRef.current) return;
       const video = videoRef.current;
       const canvas = canvasRef.current;
-      const ctx = canvas.getContext('2d', { willReadFrequently: true });
 
-      if (video.readyState === video.HAVE_ENOUGH_DATA && ctx) {
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const now = performance.now();
+      // Throttle scanning to every 120ms to save CPU & battery while remaining instantaneous
+      if (now - lastScanTime >= 120) {
+        lastScanTime = now;
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
 
-        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        const code = jsQR(imageData.data, imageData.width, imageData.height, {
-          inversionAttempts: 'dontInvert',
-        });
+        if (video.readyState === video.HAVE_ENOUGH_DATA && ctx) {
+          canvas.width = video.videoWidth;
+          canvas.height = video.videoHeight;
+          ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-        if (code && code.data) {
-          handleDecodedCode(code.data);
-          return;
+          try {
+            const detected = await scanCanvasForCodes(canvas);
+            if (detected && detected.text) {
+              handleDecodedCode(detected.text, detected.format);
+              return;
+            }
+          } catch {
+            // Ignore scan attempt failure
+          }
         }
       }
 
@@ -618,12 +770,11 @@ export const InventoryQrScannerModal: React.FC<InventoryQrScannerModalProps> = (
     }
   };
 
-  // Flip Camera
   const flipCamera = () => {
     setFacingMode((prev) => (prev === 'environment' ? 'user' : 'environment'));
   };
 
-  // Handle Photo File Upload to scan QR
+  // Handle Photo File Upload to scan QR code or 1D barcode
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -631,20 +782,16 @@ export const InventoryQrScannerModal: React.FC<InventoryQrScannerModalProps> = (
     const reader = new FileReader();
     reader.onload = (event) => {
       const img = new Image();
-      img.onload = () => {
-        const canvas = document.createElement('canvas');
-        canvas.width = img.width;
-        canvas.height = img.height;
-        const ctx = canvas.getContext('2d');
-        if (ctx) {
-          ctx.drawImage(img, 0, 0);
-          const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-          const code = jsQR(imageData.data, imageData.width, imageData.height);
-          if (code && code.data) {
-            handleDecodedCode(code.data);
+      img.onload = async () => {
+        try {
+          const detected = await scanImageForCodes(img);
+          if (detected && detected.text) {
+            handleDecodedCode(detected.text, detected.format);
           } else {
-            alert('No scannable QR code was detected in the uploaded image. Please try another angle or enter the serial code manually.');
+            alert('No scannable QR code or barcode was detected in the uploaded image. Please try another angle or enter the serial code manually.');
           }
+        } catch (err: any) {
+          alert('Error scanning uploaded photo: ' + err.message);
         }
       };
       img.src = event.target?.result as string;
@@ -656,42 +803,8 @@ export const InventoryQrScannerModal: React.FC<InventoryQrScannerModalProps> = (
   const handleManualLookup = (e: React.FormEvent) => {
     e.preventDefault();
     if (!manualCode.trim()) return;
-    handleDecodedCode(manualCode.trim());
+    handleDecodedCode(manualCode.trim(), 'MANUAL');
     setManualCode('');
-  };
-
-  // Test Sample QR Codes for staff / demo
-  const testSample = (type: 'DAIKIN' | 'VOLTAS' | 'EXISTING' | 'DELIVERY' | 'NEW_BARCODE') => {
-    if (type === 'EXISTING' && inventory.length > 0) {
-      const first = inventory[0];
-      handleDecodedCode(first.serialNo || first.modelNo || first.id);
-    } else if (type === 'DELIVERY' && shipments && shipments.length > 0) {
-      const firstShipment = shipments[0];
-      handleDecodedCode(firstShipment.id);
-    } else if (type === 'NEW_BARCODE') {
-      const randomSn = 'UNREG-SN-' + Math.floor(100000 + Math.random() * 900000);
-      handleDecodedCode(randomSn);
-    } else if (type === 'DAIKIN') {
-      const json = JSON.stringify({
-        name: 'Daikin 1.5 Ton 5-Star Inverter Split AC',
-        modelNo: 'FTKF50TV16U',
-        brand: 'Daikin',
-        type: 'AC',
-        serialNo: 'SN-DKN-' + Math.floor(100000 + Math.random() * 900000),
-        price: 45990,
-      });
-      handleDecodedCode(json);
-    } else {
-      const json = JSON.stringify({
-        name: 'Voltas 1.5 Ton 3-Star Adjustable Inverter AC',
-        modelNo: '183V Vectra Prism',
-        brand: 'Voltas',
-        type: 'AC',
-        serialNo: 'SN-VLT-' + Math.floor(100000 + Math.random() * 900000),
-        price: 34990,
-      });
-      handleDecodedCode(json);
-    }
   };
 
   // Quick 1-Click Save to Inventory
@@ -699,25 +812,78 @@ export const InventoryQrScannerModal: React.FC<InventoryQrScannerModalProps> = (
     if (!scannedResult || !onQuickAddItemDirect) return;
     setIsQuickAdding(true);
     try {
+      const isAc = unregisteredType.toUpperCase() === 'AC';
+      const effModel = unregisteredRole === 'modelNo' ? scannedResult.raw : (unregisteredModel || 'MODEL-101');
+      const effIndoorModel = isAc
+        ? (unregisteredRole === 'indoorModelNo' ? scannedResult.raw : (unregisteredIndoorModel || undefined))
+        : undefined;
+      const effOutdoorModel = isAc
+        ? (unregisteredRole === 'outdoorModelNo' ? scannedResult.raw : (unregisteredOutdoorModel || undefined))
+        : undefined;
+      const effIndoor = isAc
+        ? (unregisteredRole === 'indoorUnitSerial' || unregisteredRole === 'serialNo'
+            ? scannedResult.raw
+            : (unregisteredIndoorSerial || scannedResult.raw))
+        : undefined;
+      const effOutdoor = isAc
+        ? (unregisteredRole === 'outdoorUnitSerial' ? scannedResult.raw : (unregisteredOutdoorSerial || ''))
+        : undefined;
+      const effSerial = isAc
+        ? (effIndoor || effOutdoor || scannedResult.raw)
+        : (unregisteredRole === 'serialNo' ? scannedResult.raw : (unregisteredSerial || scannedResult.raw));
+
       const itemToSave = {
-        name: scannedResult.name || scannedResult.modelNo || 'In-Store Appliance',
-        modelNo: scannedResult.modelNo || 'GENERIC-MODEL',
-        type: scannedResult.type || 'AC',
-        brand: scannedResult.brand || 'Lakhi Store Stock',
-        serialNo: scannedResult.serialNo || scannedResult.raw,
-        sellingPrice: scannedResult.price || 0,
+        name: `${unregisteredBrand} ${effModel} ${isAc ? 'Inverter Split AC' : 'Appliance'}`,
+        modelNo: effModel,
+        indoorModelNo: effIndoorModel,
+        outdoorModelNo: effOutdoorModel,
+        type: unregisteredType,
+        brand: unregisteredBrand,
+        serialNo: effSerial,
+        indoorUnitSerial: effIndoor,
+        outdoorUnitSerial: effOutdoor,
+        sellingPrice: unregisteredPrice || 45000,
       };
       await onQuickAddItemDirect(itemToSave);
       setQuickAddSuccess(true);
-      // Re-query inventory match
       setTimeout(() => {
-        const foundList = findMatchingItems(scannedResult);
-        setMatchedItems(foundList);
-        if (foundList[0]) setMatchedItem(foundList[0]);
-      }, 300);
+        processScannedValue(scannedResult);
+      }, 350);
     } finally {
       setIsQuickAdding(false);
     }
+  };
+
+  const handleEnterByScanningInAdd = () => {
+    if (!scannedResult) return;
+    const isAc = unregisteredType.toUpperCase() === 'AC';
+    onOpenAddItemWithData({
+      type: unregisteredType,
+      brand: unregisteredBrand,
+      modelNo: unregisteredRole === 'modelNo' ? scannedResult.raw : unregisteredModel,
+      indoorModelNo: isAc
+        ? (unregisteredRole === 'indoorModelNo' ? scannedResult.raw : (unregisteredIndoorModel || undefined))
+        : undefined,
+      outdoorModelNo: isAc
+        ? (unregisteredRole === 'outdoorModelNo' ? scannedResult.raw : (unregisteredOutdoorModel || undefined))
+        : undefined,
+      serialNo:
+        unregisteredRole === 'serialNo' || unregisteredRole === 'indoorUnitSerial'
+          ? scannedResult.raw
+          : unregisteredSerial,
+      indoorUnitSerial: isAc
+        ? unregisteredRole === 'indoorUnitSerial' || unregisteredRole === 'serialNo'
+          ? scannedResult.raw
+          : unregisteredIndoorSerial
+        : undefined,
+      outdoorUnitSerial: isAc
+        ? unregisteredRole === 'outdoorUnitSerial'
+          ? scannedResult.raw
+          : unregisteredOutdoorSerial
+        : undefined,
+      price: unregisteredPrice,
+    });
+    onClose();
   };
 
   // Lifecycle
@@ -728,7 +894,8 @@ export const InventoryQrScannerModal: React.FC<InventoryQrScannerModalProps> = (
       stopCameraStream();
       setCameraActive(false);
       setScannedResult(null);
-      setMatchedItem(null);
+      setSpecificUnit(null);
+      setModelGroupUnits([]);
       setQuickAddSuccess(false);
     }
     return () => {
@@ -740,7 +907,7 @@ export const InventoryQrScannerModal: React.FC<InventoryQrScannerModalProps> = (
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/85 backdrop-blur-sm p-3 sm:p-4 overflow-y-auto">
-      <div className="bg-white dark:bg-slate-900 rounded-3xl shadow-2xl w-full max-w-lg overflow-hidden border border-slate-200 dark:border-slate-800 my-4 max-h-[95vh] flex flex-col">
+      <div className="bg-white dark:bg-slate-900 rounded-3xl shadow-2xl w-full max-w-xl overflow-hidden border border-slate-200 dark:border-slate-800 my-4 max-h-[95vh] flex flex-col">
         {/* Header */}
         <div className="px-5 py-3.5 border-b border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/60 flex items-center justify-between">
           <div className="flex items-center gap-2.5">
@@ -749,10 +916,13 @@ export const InventoryQrScannerModal: React.FC<InventoryQrScannerModalProps> = (
             </div>
             <div>
               <h3 className="font-black text-slate-900 dark:text-white text-sm sm:text-base flex items-center gap-1.5">
-                Device Camera QR / Label Scanner
+                <span>QR &amp; Barcode Scanner</span>
+                <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300">
+                  2D &amp; 1D
+                </span>
               </h3>
               <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                Point camera at product label or QR code to look up or add stock
+                Point camera at carton barcode, product QR, or type serial/model to look up in-store stock
               </p>
             </div>
           </div>
@@ -783,7 +953,6 @@ export const InventoryQrScannerModal: React.FC<InventoryQrScannerModalProps> = (
                 {/* Scanning Target Overlay */}
                 {cameraActive && (
                   <div className="absolute inset-0 pointer-events-none flex items-center justify-center">
-                    {/* Darkened vignette surround */}
                     <div className="relative w-64 h-64 border-2 border-red-500/80 rounded-2xl shadow-[0_0_0_9999px_rgba(0,0,0,0.45)] flex items-center justify-center">
                       {/* Animated Laser Scanning Line */}
                       <div className="absolute left-2 right-2 h-0.5 bg-red-500 shadow-[0_0_8px_#ef4444] animate-pulse top-1/2 -translate-y-1/2" />
@@ -795,7 +964,7 @@ export const InventoryQrScannerModal: React.FC<InventoryQrScannerModalProps> = (
                       <div className="absolute bottom-0 right-0 w-6 h-6 border-b-4 border-r-4 border-red-500 rounded-br-lg" />
 
                       <span className="text-[10px] font-mono font-bold text-white/90 bg-black/60 px-2.5 py-1 rounded-full uppercase tracking-wider backdrop-blur-xs">
-                        Align Label / QR Inside
+                        Scan QR Code or Barcode
                       </span>
                     </div>
                   </div>
@@ -806,7 +975,7 @@ export const InventoryQrScannerModal: React.FC<InventoryQrScannerModalProps> = (
                   <div className="absolute top-3 left-3 right-3 flex items-center justify-between pointer-events-auto">
                     <span className="px-2 py-0.5 bg-black/60 text-emerald-400 border border-emerald-500/30 rounded-full text-[10px] font-mono font-bold flex items-center gap-1 backdrop-blur-xs">
                       <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" />
-                      LIVE FEED
+                      SCANNING (1D + 2D)
                     </span>
 
                     <div className="flex items-center gap-1.5">
@@ -868,7 +1037,7 @@ export const InventoryQrScannerModal: React.FC<InventoryQrScannerModalProps> = (
                 )}
               </div>
 
-              {/* Quick Actions Bar (Photo Upload & Sample Test Labels) */}
+              {/* Photo Upload & Quick Demo Triggers */}
               <div className="flex flex-wrap items-center justify-between gap-2 pt-1">
                 <input
                   ref={fileInputRef}
@@ -883,58 +1052,15 @@ export const InventoryQrScannerModal: React.FC<InventoryQrScannerModalProps> = (
                   className="px-3 py-1.5 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors"
                 >
                   <Upload className="w-3.5 h-3.5 text-blue-500" />
-                  Upload Photo with QR
+                  Upload Photo (QR or Barcode)
                 </button>
 
-                {/* Instant Simulation Buttons for quick testing without physical AC box */}
-                <div className="flex items-center gap-1 text-[11px]">
-                  <span className="text-slate-400 text-[10px] hidden sm:inline">Demo QR:</span>
-                  <button
-                    type="button"
-                    onClick={() => testSample('DAIKIN')}
-                    className="px-2 py-1 bg-blue-50 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300 rounded-lg hover:underline font-bold"
-                  >
-                    + Daikin AC
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => testSample('VOLTAS')}
-                    className="px-2 py-1 bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 rounded-lg hover:underline font-bold"
-                  >
-                    + Voltas AC
-                  </button>
-                  {inventory.length > 0 && (
-                    <button
-                      type="button"
-                      onClick={() => testSample('EXISTING')}
-                      className="px-2 py-1 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 rounded-lg hover:underline font-bold"
-                      title="Test scanning first existing in-stock item"
-                    >
-                      + In-Stock Item
-                    </button>
-                  )}
-                  {shipments && shipments.length > 0 && (
-                    <button
-                      type="button"
-                      onClick={() => testSample('DELIVERY')}
-                      className="px-2 py-1 bg-purple-50 dark:bg-purple-950/40 text-purple-700 dark:text-purple-300 rounded-lg hover:underline font-bold"
-                      title="Test scanning a pending delivery order"
-                    >
-                      + Delivery Order
-                    </button>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => testSample('NEW_BARCODE')}
-                    className="px-2 py-1 bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 rounded-lg hover:underline font-bold"
-                    title="Test scanning an unregistered barcode"
-                  >
-                    + New Barcode
-                  </button>
+                <div className="text-[10px] text-slate-400 font-mono">
+                  Supports QR, Code 128, EAN-13, UPC
                 </div>
               </div>
 
-              {/* Manual Barcode / Serial Lookup Fallback */}
+              {/* Manual Barcode / Serial / Model Lookup */}
               <form onSubmit={handleManualLookup} className="pt-2">
                 <div className="relative">
                   <Barcode className="w-4 h-4 text-slate-400 absolute left-3 top-2.5" />
@@ -942,13 +1068,13 @@ export const InventoryQrScannerModal: React.FC<InventoryQrScannerModalProps> = (
                     type="text"
                     value={manualCode}
                     onChange={(e) => setManualCode(e.target.value)}
-                    placeholder="Or type/paste Serial No, Model No, Delivery ID (D...), or Invoice ID (I...)..."
+                    placeholder="Enter Serial No (sr number) or Model No..."
                     className="w-full text-xs pl-9 pr-24 py-2 border border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-white rounded-xl focus:ring-2 focus:ring-red-500 outline-none font-mono"
                   />
                   <button
                     type="submit"
                     disabled={!manualCode.trim()}
-                    className="absolute right-1.5 top-1 px-3 py-1 bg-red-600 hover:bg-red-700 disabled:opacity-40 text-white font-bold text-xs rounded-lg transition-colors"
+                    className="absolute right-1.5 top-1 px-3 py-1 bg-red-600 hover:bg-red-700 disabled:opacity-40 text-white font-bold text-xs rounded-lg transition-colors cursor-pointer"
                   >
                     Lookup
                   </button>
@@ -956,9 +1082,31 @@ export const InventoryQrScannerModal: React.FC<InventoryQrScannerModalProps> = (
               </form>
             </div>
           ) : (
-            /* Scanned Result Card: Identified In-Stock Item vs Delivery Order Match vs New Item */
+            /* SCANNED RESULT VIEW (BUG 3 IMPLEMENTATION) */
             <div className="space-y-4 animate-in fade-in zoom-in-95 duration-150">
-              {/* ORDER UPDATE FEEDBACK TOAST */}
+              {/* Scan Again Bar */}
+              <div className="flex items-center justify-between bg-slate-100 dark:bg-slate-800/80 p-2.5 rounded-2xl border border-slate-200 dark:border-slate-700 text-xs">
+                <div className="flex items-center gap-2 truncate">
+                  <span className="font-mono text-[11px] bg-white dark:bg-slate-900 px-2 py-0.5 rounded-md font-bold text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700 truncate max-w-[200px]">
+                    {scannedResult.raw}
+                  </span>
+                  {scannedResult.format && (
+                    <span className="text-[10px] text-slate-400 font-mono uppercase">
+                      ({scannedResult.format})
+                    </span>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={startCamera}
+                  className="px-3 py-1 bg-red-600 hover:bg-red-700 text-white font-bold rounded-xl text-xs flex items-center gap-1 transition-colors"
+                >
+                  <RefreshCw className="w-3 h-3" />
+                  <span>Scan Next</span>
+                </button>
+              </div>
+
+              {/* Order Update Feedback Toast */}
               {orderUpdateFeedback && (
                 <div className="p-3 bg-emerald-100 dark:bg-emerald-950/80 border border-emerald-300 dark:border-emerald-800 text-emerald-900 dark:text-emerald-200 rounded-2xl text-xs font-bold flex items-center gap-2 shadow-xs animate-in fade-in">
                   <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
@@ -966,62 +1114,265 @@ export const InventoryQrScannerModal: React.FC<InventoryQrScannerModalProps> = (
                 </div>
               )}
 
-              {/* 1. MATCHES FOUND IN ACTIVE INVENTORY */}
-              {matchedItems.length > 0 ? (
-                <div className="bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/60 rounded-2xl p-4 sm:p-5 space-y-3.5">
-                  <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3 pb-3 border-b border-emerald-200/60 dark:border-emerald-900/40">
+              {/* CASE 1: EXACT SPECIFIC SERIAL / STOCK ID MATCH */}
+              {matchMode === 'SPECIFIC_UNIT' && specificUnit && (
+                <div className="bg-emerald-50/70 dark:bg-emerald-950/30 border-2 border-emerald-400 dark:border-emerald-700 rounded-2xl p-4 sm:p-5 space-y-3.5 shadow-xs">
+                  <div className="flex items-start justify-between gap-3 pb-3 border-b border-emerald-200/80 dark:border-emerald-900/40">
                     <div className="flex items-start gap-3">
                       <div className="p-2.5 bg-emerald-600 text-white rounded-xl shadow-xs mt-0.5">
                         <CheckCircle2 className="w-5 h-5" />
                       </div>
                       <div>
-                        <span className="text-[10px] uppercase tracking-wider font-extrabold text-emerald-700 dark:text-emerald-300 block">
-                          Product Identified via Barcode Scan
+                        <span className="text-[10px] uppercase tracking-wider font-extrabold text-emerald-700 dark:text-emerald-300 flex items-center gap-1.5">
+                          <span>🎯 Exact Specific In-Store Unit Identified</span>
                         </span>
-                        <h4 className="font-black text-slate-900 dark:text-white text-base sm:text-lg">
-                          {matchedItems[0].name}
+                        <h4 className="font-black text-slate-900 dark:text-white text-base sm:text-lg mt-0.5">
+                          {specificUnit.name}
                         </h4>
                         <div className="flex flex-wrap items-center gap-2 mt-1 text-xs text-slate-600 dark:text-slate-300">
-                          <span>Brand: <strong className="text-slate-900 dark:text-white">{matchedItems[0].brand}</strong></span>
+                          <span>Brand: <strong className="text-slate-900 dark:text-white">{specificUnit.brand}</strong></span>
                           <span>•</span>
-                          <span>Model: <strong className="font-mono text-slate-900 dark:text-white">{matchedItems[0].modelNo}</strong></span>
+                          <span>Model: <strong className="font-mono text-slate-900 dark:text-white">{specificUnit.modelNo}</strong></span>
                         </div>
                       </div>
                     </div>
 
-                    <div className="flex sm:flex-col items-center sm:items-end justify-between gap-1.5 shrink-0 bg-white dark:bg-slate-900 sm:bg-transparent p-2.5 sm:p-0 rounded-xl border sm:border-0 border-emerald-100">
-                      <div>
-                        <span className="text-[10px] uppercase tracking-wider text-slate-400 font-bold block sm:text-right">Product Price</span>
-                        <span className="text-emerald-600 dark:text-emerald-400 font-black text-lg">
-                          ₹{matchedItems[0].sellingPrice.toLocaleString('en-IN')}
-                        </span>
-                      </div>
-                      <span className="px-3 py-1 rounded-full text-xs font-black bg-emerald-600 text-white shadow-xs">
-                        {matchedItems.filter((i) => i.status === 'AVAILABLE').length} Available in Stock
+                    <div className="text-right shrink-0">
+                      <span className="text-[10px] uppercase tracking-wider text-slate-400 font-bold block">Selling Price</span>
+                      <span className="text-emerald-600 dark:text-emerald-400 font-black text-lg">
+                        ₹{specificUnit.sellingPrice.toLocaleString('en-IN')}
                       </span>
                     </div>
                   </div>
 
-                  {/* Inform if any units with this barcode left store and were delivered */}
-                  {archivedMatchCount > 0 && (
-                    <div className="p-2.5 bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-300 rounded-xl text-xs font-semibold flex items-center gap-2">
-                      <span>⚠️ Note: {archivedMatchCount} unit(s) with this barcode have left the store (Delivered & Installed) and are archived.</span>
+                  {/* Unit Specific Card */}
+                  <div className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-emerald-200 dark:border-emerald-800 space-y-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="px-2.5 py-1 rounded-lg bg-red-100 dark:bg-red-950/70 text-red-800 dark:text-red-200 border border-red-300 dark:border-red-800 font-mono text-xs font-black">
+                          Stock ID: {specificUnit.stockId || `${specificUnit.serialNo || specificUnit.id}-01`}
+                        </span>
+                        {specificUnit.type?.toUpperCase() === 'AC' ? (
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <span className={`text-xs font-mono font-bold px-2 py-0.5 rounded-md border flex items-center gap-1 ${
+                              scannedResult?.raw && (
+                                specificUnit.indoorUnitSerial?.toLowerCase() === scannedResult.raw.toLowerCase() ||
+                                specificUnit.indoorModelNo?.toLowerCase() === scannedResult.raw.toLowerCase() ||
+                                specificUnit.serialNo?.toLowerCase() === scannedResult.raw.toLowerCase()
+                              )
+                                ? 'bg-blue-600 text-white border-blue-700 shadow-xs'
+                                : 'bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 border-blue-200 dark:border-blue-900'
+                            }`}>
+                              <span>
+                                Indoor (IDU): {specificUnit.indoorModelNo ? `[${specificUnit.indoorModelNo}] ` : ''}
+                                {specificUnit.indoorUnitSerial || specificUnit.serialNo || 'None'}
+                              </span>
+                            </span>
+                            <span className={`text-xs font-mono font-bold px-2 py-0.5 rounded-md border flex items-center gap-1 ${
+                              scannedResult?.raw && (
+                                specificUnit.outdoorUnitSerial?.toLowerCase() === scannedResult.raw.toLowerCase() ||
+                                specificUnit.outdoorModelNo?.toLowerCase() === scannedResult.raw.toLowerCase()
+                              )
+                                ? 'bg-indigo-600 text-white border-indigo-700 shadow-xs'
+                                : 'bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border-indigo-200 dark:border-indigo-900'
+                            }`}>
+                              <span>
+                                Outdoor (ODU): {specificUnit.outdoorModelNo ? `[${specificUnit.outdoorModelNo}] ` : ''}
+                                {specificUnit.outdoorUnitSerial || 'None'}
+                              </span>
+                            </span>
+                          </div>
+                        ) : (
+                          <span className="text-xs font-mono font-bold text-slate-700 dark:text-slate-300 flex items-center gap-1">
+                            <Barcode className="w-3.5 h-3.5 text-slate-400" />
+                            <span>SN: {specificUnit.serialNo || 'None'}</span>
+                          </span>
+                        )}
+                      </div>
+
+                      <span
+                        className={`px-3 py-1 rounded-full text-xs font-black ${
+                          specificUnit.status === 'AVAILABLE'
+                            ? 'bg-emerald-600 text-white shadow-xs'
+                            : 'bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300'
+                        }`}
+                      >
+                        {specificUnit.status === 'AVAILABLE' ? '✓ AVAILABLE IN STORE' : specificUnit.status}
+                      </span>
+                    </div>
+
+                    {/* Actions for this specific unit */}
+                    <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+                      {specificUnit.status === 'AVAILABLE' && onBillItem && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            onBillItem(specificUnit);
+                            onClose();
+                          }}
+                          className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-xl text-xs font-bold shadow-xs flex items-center gap-1.5 transition-colors cursor-pointer"
+                        >
+                          <ShoppingBag className="w-3.5 h-3.5" />
+                          <span>+ Bill This Specific Unit</span>
+                        </button>
+                      )}
+                      {onToggleItemSold && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            onToggleItemSold(specificUnit.id);
+                            setSpecificUnit((prev) =>
+                              prev ? { ...prev, status: prev.status === 'AVAILABLE' ? 'SOLD' : 'AVAILABLE' } : null
+                            );
+                          }}
+                          className="px-3 py-2 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 rounded-xl text-xs font-bold hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors"
+                        >
+                          {specificUnit.status === 'AVAILABLE' ? 'Mark Sold' : 'Mark Available'}
+                        </button>
+                      )}
+                      {onEditItem && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            onEditItem(specificUnit);
+                            onClose();
+                          }}
+                          className="px-3 py-2 bg-slate-100 dark:bg-slate-800 text-blue-600 rounded-xl text-xs font-bold hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors flex items-center gap-1"
+                        >
+                          <Edit2 className="w-3.5 h-3.5" />
+                          <span>Edit</span>
+                        </button>
+                      )}
+                      {onHighlightItemInTable && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            onHighlightItemInTable(specificUnit.id);
+                            onClose();
+                          }}
+                          className="px-3 py-2 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 rounded-xl text-xs font-bold hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors"
+                        >
+                          Locate in Godown Table
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Sibling in-store units of same model */}
+                  {modelGroupUnits.length > 0 && (
+                    <div className="pt-2">
+                      <button
+                        type="button"
+                        onClick={() => setShowOtherModelUnits(!showOtherModelUnits)}
+                        className="w-full py-2 px-3 bg-white/80 dark:bg-slate-900/80 hover:bg-white text-slate-700 dark:text-slate-300 font-bold rounded-xl border border-emerald-200 dark:border-emerald-800 text-xs flex items-center justify-between transition-colors"
+                      >
+                        <span className="flex items-center gap-1.5">
+                          <Boxes className="w-4 h-4 text-emerald-600" />
+                          <span>
+                            View other {modelGroupUnits.length} in-store units of model "{specificUnit.modelNo}"
+                          </span>
+                        </span>
+                        {showOtherModelUnits ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+                      </button>
+
+                      {showOtherModelUnits && (
+                        <div className="mt-2 space-y-2 p-3 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 max-h-56 overflow-y-auto">
+                          <span className="text-[10px] font-bold text-slate-400 block uppercase tracking-wider">
+                            Other Units In-Store Stock IDs:
+                          </span>
+                          {modelGroupUnits.map((it, idx) => (
+                            <div
+                              key={it.id}
+                              className="p-2 bg-slate-50 dark:bg-slate-800/60 rounded-lg flex items-center justify-between text-xs"
+                            >
+                              <div className="flex items-center gap-2">
+                                <span className="px-2 py-0.5 rounded bg-red-100 dark:bg-red-950 text-red-700 dark:text-red-300 font-mono font-bold text-[11px]">
+                                  {it.stockId || `${it.serialNo || it.id}-${idx + 1}`}
+                                </span>
+                                <span className="font-mono text-slate-500 text-[11px]">
+                                  SN: {it.serialNo || 'None'}
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <span className="text-emerald-600 font-bold">
+                                  ₹{it.sellingPrice.toLocaleString('en-IN')}
+                                </span>
+                                {onBillItem && it.status === 'AVAILABLE' && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      onBillItem(it);
+                                      onClose();
+                                    }}
+                                    className="px-2 py-1 bg-red-600 hover:bg-red-700 text-white font-bold rounded text-[10px]"
+                                  >
+                                    Bill
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   )}
+                </div>
+              )}
 
-                  {/* List of All Matching Stock Units */}
-                  <div className="space-y-3">
-                    {matchedItems.map((item, idx) => (
+              {/* CASE 2: MODEL NUMBER MATCH — SHOW ALL STOCK IDs OF THAT MODEL IN STORE */}
+              {matchMode === 'MODEL_GROUP' && modelGroupUnits.length > 0 && (
+                <div className="bg-indigo-50/70 dark:bg-indigo-950/30 border-2 border-indigo-300 dark:border-indigo-800 rounded-2xl p-4 sm:p-5 space-y-3.5 shadow-xs">
+                  <div className="flex items-start justify-between gap-3 pb-3 border-b border-indigo-200/80 dark:border-indigo-900/40">
+                    <div className="flex items-start gap-3">
+                      <div className="p-2.5 bg-indigo-600 text-white rounded-xl shadow-xs mt-0.5">
+                        <Boxes className="w-5 h-5" />
+                      </div>
+                      <div>
+                        <span className="text-[10px] uppercase tracking-wider font-extrabold text-indigo-700 dark:text-indigo-300 block">
+                          📦 Model Matched — All In-Store Stock IDs
+                        </span>
+                        <h4 className="font-black text-slate-900 dark:text-white text-base sm:text-lg mt-0.5">
+                          {modelGroupUnits[0].brand} {modelGroupUnits[0].modelNo}
+                        </h4>
+                        <p className="text-xs text-slate-600 dark:text-slate-300 mt-0.5">
+                          {modelGroupUnits[0].name}
+                        </p>
+                      </div>
+                    </div>
+
+                    <div className="text-right shrink-0">
+                      <span className="px-3 py-1 rounded-full text-xs font-black bg-indigo-600 text-white shadow-xs block">
+                        {modelGroupUnits.length} In-Store Units
+                      </span>
+                      <span className="text-[10px] text-slate-500 font-bold block mt-1">
+                        ({modelGroupUnits.filter((i) => i.status === 'AVAILABLE').length} Available)
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Inform that ONLY in-store stock IDs are shown */}
+                  <div className="p-2.5 bg-white dark:bg-slate-900 rounded-xl border border-indigo-100 dark:border-indigo-900/40 text-[11px] text-indigo-800 dark:text-indigo-200 flex items-center justify-between">
+                    <span>
+                      Showing <strong>only in-store stock units</strong> for model <strong>{modelGroupUnits[0].modelNo}</strong>.
+                    </span>
+                    <span className="text-slate-400 font-mono">
+                      ₹{modelGroupUnits[0].sellingPrice.toLocaleString('en-IN')} each
+                    </span>
+                  </div>
+
+                  {/* LIST ALL IN-STORE STOCK IDs FOR THIS MODEL */}
+                  <div className="space-y-2.5 max-h-72 overflow-y-auto">
+                    {modelGroupUnits.map((item, idx) => (
                       <div
                         key={item.id}
-                        className="bg-white dark:bg-slate-900/90 p-3.5 rounded-xl border border-emerald-100 dark:border-emerald-900/40 space-y-2.5"
+                        className="bg-white dark:bg-slate-900 p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 space-y-2 shadow-xs"
                       >
                         <div className="flex flex-wrap items-center justify-between gap-2">
                           <div className="flex items-center gap-2">
-                            <span className="text-[10px] font-black px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
-                              Unit #{idx + 1}
+                            <span className="text-[10px] font-mono font-bold text-slate-400">
+                              #{idx + 1}
                             </span>
-                            <span className="font-mono text-xs font-black px-2 py-0.5 rounded-md bg-red-100 dark:bg-red-950/60 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-900/40">
+                            <span className="px-2.5 py-0.5 rounded-lg bg-red-100 dark:bg-red-950/70 text-red-800 dark:text-red-200 border border-red-200 dark:border-red-900/50 font-mono text-xs font-black">
                               Stock ID: {item.stockId || `${item.serialNo || item.id}-${idx + 1}`}
                             </span>
                           </div>
@@ -1037,29 +1388,30 @@ export const InventoryQrScannerModal: React.FC<InventoryQrScannerModalProps> = (
                           </span>
                         </div>
 
-                        {/* Product details */}
-                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
-                          <div>
-                            <span className="text-[10px] text-slate-400 block font-bold">Brand & Model</span>
-                            <strong className="text-slate-900 dark:text-white font-mono">{item.brand} • {item.modelNo}</strong>
-                          </div>
-                          <div>
-                            <span className="text-[10px] text-slate-400 block font-bold">Selling Price</span>
-                            <strong className="text-emerald-600 dark:text-emerald-400 font-black">
-                              ₹{item.sellingPrice.toLocaleString('en-IN')}
-                            </strong>
-                          </div>
-                          <div className="col-span-2">
-                            <span className="text-[10px] text-slate-400 block font-bold">Carton Barcode / Serial No</span>
-                            <span className="font-mono text-slate-800 dark:text-slate-200 font-bold flex items-center gap-1.5">
+                        <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                          {item.type?.toUpperCase() === 'AC' ? (
+                            <div className="flex flex-wrap items-center gap-1.5 font-mono text-[11px]">
+                              <span className="text-blue-700 dark:text-blue-300">
+                                IDU: {item.indoorModelNo ? `[${item.indoorModelNo}] ` : ''}{item.indoorUnitSerial || item.serialNo || 'None'}
+                              </span>
+                              <span>•</span>
+                              <span className="text-indigo-700 dark:text-indigo-300">
+                                ODU: {item.outdoorModelNo ? `[${item.outdoorModelNo}] ` : ''}{item.outdoorUnitSerial || 'None'}
+                              </span>
+                            </div>
+                          ) : (
+                            <span className="font-mono text-slate-600 dark:text-slate-400 flex items-center gap-1">
                               <Barcode className="w-3.5 h-3.5 text-slate-400" />
-                              {item.serialNo || 'Not specified'}
+                              <span>SN: {item.serialNo || 'None'}</span>
                             </span>
-                          </div>
+                          )}
+                          <span className="font-bold text-emerald-600 dark:text-emerald-400">
+                            ₹{item.sellingPrice.toLocaleString('en-IN')}
+                          </span>
                         </div>
 
-                        {/* Actions for this specific unit */}
-                        <div className="flex flex-wrap items-center gap-2 pt-1 border-t border-slate-100 dark:border-slate-800">
+                        {/* Action buttons for each unit */}
+                        <div className="flex flex-wrap items-center gap-2 pt-1.5 border-t border-slate-100 dark:border-slate-800">
                           {item.status === 'AVAILABLE' && onBillItem && (
                             <button
                               type="button"
@@ -1067,17 +1419,26 @@ export const InventoryQrScannerModal: React.FC<InventoryQrScannerModalProps> = (
                                 onBillItem(item);
                                 onClose();
                               }}
-                              className="px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white rounded-lg text-xs font-bold shadow-xs flex items-center gap-1 transition-colors"
+                              className="px-2.5 py-1 bg-red-600 hover:bg-red-700 text-white rounded-lg text-xs font-bold shadow-xs flex items-center gap-1 transition-colors"
                             >
                               <ShoppingBag className="w-3 h-3" />
-                              + Bill This Unit
+                              <span>+ Bill This Unit</span>
                             </button>
                           )}
                           {onToggleItemSold && (
                             <button
                               type="button"
-                              onClick={() => onToggleItemSold(item.id)}
-                              className="px-3 py-1.5 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 rounded-lg text-xs font-bold hover:bg-slate-200 transition-colors"
+                              onClick={() => {
+                                onToggleItemSold(item.id);
+                                setModelGroupUnits((prev) =>
+                                  prev.map((u) =>
+                                    u.id === item.id
+                                      ? { ...u, status: u.status === 'AVAILABLE' ? 'SOLD' : 'AVAILABLE' }
+                                      : u
+                                  )
+                                );
+                              }}
+                              className="px-2.5 py-1 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 rounded-lg text-xs font-bold hover:bg-slate-200 transition-colors"
                             >
                               {item.status === 'AVAILABLE' ? 'Mark Sold' : 'Mark Available'}
                             </button>
@@ -1089,10 +1450,10 @@ export const InventoryQrScannerModal: React.FC<InventoryQrScannerModalProps> = (
                                 onEditItem(item);
                                 onClose();
                               }}
-                              className="px-3 py-1.5 bg-slate-100 dark:bg-slate-800 text-blue-600 rounded-lg text-xs font-bold hover:bg-slate-200 transition-colors flex items-center gap-1"
+                              className="px-2.5 py-1 bg-slate-100 dark:bg-slate-800 text-blue-600 rounded-lg text-xs font-bold hover:bg-slate-200 transition-colors flex items-center gap-1"
                             >
-                              <Edit2 className="w-3.5 h-3.5" />
-                              Edit
+                              <Edit2 className="w-3 h-3" />
+                              <span>Edit</span>
                             </button>
                           )}
                           {onHighlightItemInTable && (
@@ -1102,7 +1463,7 @@ export const InventoryQrScannerModal: React.FC<InventoryQrScannerModalProps> = (
                                 onHighlightItemInTable(item.id);
                                 onClose();
                               }}
-                              className="px-3 py-1.5 bg-slate-100 dark:bg-slate-800 text-slate-600 rounded-lg text-xs font-bold hover:bg-slate-200 transition-colors"
+                              className="px-2.5 py-1 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 rounded-lg text-xs font-bold hover:bg-slate-200 transition-colors"
                             >
                               Locate in Table
                             </button>
@@ -1111,22 +1472,17 @@ export const InventoryQrScannerModal: React.FC<InventoryQrScannerModalProps> = (
                       </div>
                     ))}
                   </div>
-                </div>
-              ) : archivedMatchCount > 0 ? (
-                /* Product archived / out of store notice */
-                <div className="bg-amber-50 dark:bg-amber-950/30 border border-amber-300 dark:border-amber-800/60 rounded-2xl p-4 sm:p-5 space-y-2">
-                  <div className="flex items-center gap-2 font-bold text-amber-800 dark:text-amber-300 text-sm">
-                    <Boxes className="w-5 h-5 text-amber-600" />
-                    <span>Product Has Left the Store (Delivered & Installed)</span>
-                  </div>
-                  <p className="text-xs text-slate-600 dark:text-slate-300">
-                    {archivedMatchCount} unit(s) matching this barcode were previously delivered & installed at the customer's site. They are marked as archived/out of store and do not appear in active inventory scanning.
-                  </p>
-                </div>
-              ) : null}
 
-              {/* 2. MATCH FOUND IN DELIVERY (SHIPMENTS) OR INVOICE */}
-              {matchedOrder && (
+                  {archivedMatchCount > 0 && (
+                    <div className="text-[10px] text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/40 p-2 rounded-lg border border-amber-200 dark:border-amber-800/50">
+                      ℹ️ Note: {archivedMatchCount} older unit(s) of this model were already delivered &amp; installed and are archived (not in store).
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* CASE 3: DELIVERY / ORDER MATCH */}
+              {matchMode === 'DELIVERY' && matchedOrder && (
                 <div className="bg-purple-50/70 dark:bg-purple-950/30 border border-purple-200 dark:border-purple-800/60 rounded-2xl p-4 sm:p-5 space-y-3.5">
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex items-center gap-2">
@@ -1135,7 +1491,7 @@ export const InventoryQrScannerModal: React.FC<InventoryQrScannerModalProps> = (
                       </div>
                       <div>
                         <span className="text-[10px] uppercase tracking-wider font-extrabold text-purple-700 dark:text-purple-300">
-                          Matched with Delivery & Customer Order!
+                          Matched with Delivery &amp; Customer Order
                         </span>
                         <h4 className="font-black text-slate-900 dark:text-white text-base">
                           {matchedOrder.shipment?.customerExternalName ||
@@ -1151,245 +1507,321 @@ export const InventoryQrScannerModal: React.FC<InventoryQrScannerModalProps> = (
                     )}
                   </div>
 
-                  <p className="text-xs text-slate-600 dark:text-slate-300">
-                    {matchedOrder.matchedReason || 'This scanned appliance or tracking code corresponds to an active delivery and customer invoice.'}
-                  </p>
+                  {matchedOrder.matchedReason && (
+                    <div className="text-xs text-purple-900 dark:text-purple-200 bg-white/80 dark:bg-slate-900/80 p-2.5 rounded-xl border border-purple-100">
+                      <strong>Match Info:</strong> {matchedOrder.matchedReason}
+                    </div>
+                  )}
 
-                  {/* Order Details Grid */}
-                  <div className="grid grid-cols-2 gap-2.5 text-xs bg-white dark:bg-slate-900/90 p-3.5 rounded-xl border border-purple-100 dark:border-purple-900/40">
-                    {matchedOrder.shipment && (
-                      <div>
-                        <span className="text-[10px] text-slate-400 block font-bold">Delivery ID</span>
-                        <strong className="text-purple-700 dark:text-purple-300 font-mono font-bold">
-                          {matchedOrder.shipment.id}
-                        </strong>
-                      </div>
-                    )}
-                    {matchedOrder.invoice && (
-                      <div>
-                        <span className="text-[10px] text-slate-400 block font-bold">Tax Invoice #</span>
-                        <strong className="text-slate-900 dark:text-white font-mono font-bold">
-                          {matchedOrder.invoice.id}
-                        </strong>
-                      </div>
-                    )}
-                    <div>
-                      <span className="text-[10px] text-slate-400 block font-bold">Customer Phone</span>
-                      <strong className="text-slate-900 dark:text-white">
-                        {matchedOrder.shipment?.customerPhone || matchedOrder.invoice?.customerPhone || 'N/A'}
-                      </strong>
-                    </div>
-                    <div>
-                      <span className="text-[10px] text-slate-400 block font-bold">Delivery Address</span>
-                      <strong className="text-slate-900 dark:text-white truncate block">
-                        {matchedOrder.shipment?.deliveryAddress || matchedOrder.invoice?.installationAddress || 'Store Pickup'}
-                      </strong>
-                    </div>
-                    <div className="col-span-2">
-                      <span className="text-[10px] text-slate-400 block font-bold">Order Items</span>
-                      <strong className="text-slate-800 dark:text-slate-200">
-                        {matchedOrder.shipment?.itemsSummary ||
-                          (matchedOrder.invoice?.items || []).map((it) => it.name).join(', ') ||
-                          'Appliance Unit'}
-                      </strong>
-                    </div>
-                  </div>
-
-                  {/* Actions to Mark Arrived at Store or Mark as Done */}
-                  <div className="flex flex-wrap items-center gap-2 pt-1">
-                    {matchedOrder.shipment && matchedOrder.shipment.status !== 'ARRIVED_AT_STORE' && (
-                      <button
-                        type="button"
-                        disabled={isUpdatingOrder}
-                        onClick={handleMarkArrivedAtStore}
-                        className="px-3.5 py-2 bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold shadow-xs flex items-center gap-1.5 transition-colors"
-                      >
-                        <Boxes className="w-3.5 h-3.5" />
-                        {isUpdatingOrder ? 'Updating...' : 'Mark Arrived at Store (In Store / Here)'}
-                      </button>
-                    )}
-
-                    {matchedOrder.shipment && matchedOrder.shipment.status !== 'DELIVERED_INSTALLED' && (
-                      <button
-                        type="button"
-                        disabled={isUpdatingOrder}
-                        onClick={handleMarkDeliveredDone}
-                        className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold shadow-xs flex items-center gap-1.5 transition-colors"
-                      >
-                        <Check className="w-3.5 h-3.5" />
-                        {isUpdatingOrder ? 'Updating...' : 'Mark Order as Done / Delivered'}
-                      </button>
-                    )}
-
-                    {!matchedItem && onQuickAddItemDirect && (
-                      <button
-                        type="button"
-                        disabled={isQuickAdding}
-                        onClick={handleQuickAddDirect}
-                        className="px-3 py-2 bg-white dark:bg-slate-800 border border-purple-200 dark:border-purple-800 text-purple-700 dark:text-purple-300 rounded-xl text-xs font-bold hover:bg-purple-50 transition-colors flex items-center gap-1"
-                      >
-                        <Plus className="w-3.5 h-3.5" />
-                        + Register into Store Stock
-                      </button>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {/* 3. NOT FOUND IN INVENTORY AND NOT FOUND IN DELIVERIES / INVOICES */}
-              {!matchedItem && !matchedOrder && (
-                <div className="bg-amber-50/70 dark:bg-amber-950/30 border-2 border-dashed border-amber-300 dark:border-amber-800/80 rounded-2xl p-4 sm:p-5 space-y-3.5">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="flex items-center gap-2">
-                      <div className="p-2 bg-amber-600 text-white rounded-xl shadow-xs">
-                        <AlertCircle className="w-5 h-5" />
-                      </div>
-                      <div>
-                        <span className="text-[10px] uppercase tracking-wider font-extrabold text-amber-700 dark:text-amber-300">
-                          Product Not Found in System
-                        </span>
-                        <h4 className="font-black text-slate-900 dark:text-white text-base">
-                          {scannedResult.name || scannedResult.modelNo || 'Unregistered Product Label'}
-                        </h4>
-                      </div>
-                    </div>
-                    <span className="px-2.5 py-1 bg-amber-200 dark:bg-amber-900/60 text-amber-900 dark:text-amber-200 rounded-full text-[10px] font-black shrink-0">
-                      NOT IN STOCK
-                    </span>
-                  </div>
-
-                  <div className="bg-white dark:bg-slate-900/90 p-3 rounded-xl border border-amber-200 dark:border-amber-900/50">
-                    <p className="text-xs font-bold text-slate-800 dark:text-slate-100">
-                      This product or serial is not in your Store Stock, Deliveries, or Invoices.
-                    </p>
-                    <p className="text-xs text-amber-700 dark:text-amber-400 font-bold mt-0.5">
-                      Would you like to register and add this item to Store Stock now?
-                    </p>
-                  </div>
-
-                  {/* Scanned Label Data Extract & Quick Edit inputs */}
-                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 text-xs bg-white dark:bg-slate-900/90 p-3.5 rounded-xl border border-amber-100 dark:border-amber-900/40">
-                    <div>
-                      <span className="text-[10px] text-slate-400 block font-bold">Brand</span>
-                      <input
-                        type="text"
-                        value={unregisteredBrand}
-                        onChange={(e) => setUnregisteredBrand(e.target.value)}
-                        placeholder="Brand (Daikin/Voltas)"
-                        className="w-full text-xs font-bold border border-slate-300 dark:border-slate-700 rounded-lg px-2 py-1 bg-slate-50 dark:bg-slate-800 mt-1"
-                      />
-                    </div>
-                    <div>
-                      <span className="text-[10px] text-slate-400 block font-bold">Model No</span>
-                      <input
-                        type="text"
-                        value={unregisteredModel}
-                        onChange={(e) => setUnregisteredModel(e.target.value)}
-                        placeholder="Model No"
-                        className="w-full text-xs font-mono font-bold border border-slate-300 dark:border-slate-700 rounded-lg px-2 py-1 bg-slate-50 dark:bg-slate-800 mt-1"
-                      />
-                    </div>
-                    <div>
-                      <span className="text-[10px] text-slate-400 block font-bold">Estimated Price (₹)</span>
-                      <input
-                        type="number"
-                        value={unregisteredPrice}
-                        onChange={(e) => setUnregisteredPrice(Number(e.target.value))}
-                        className="w-full text-xs font-bold border border-slate-300 dark:border-slate-700 rounded-lg px-2 py-1 bg-slate-50 dark:bg-slate-800 mt-1"
-                      />
-                    </div>
-                    <div className="col-span-2 sm:col-span-3">
-                      <span className="text-[10px] text-slate-400 block font-bold">Scanned Serial Number</span>
-                      <span className="font-mono text-slate-800 dark:text-slate-200 font-bold flex items-center gap-1.5 mt-1">
-                        <Barcode className="w-3.5 h-3.5 text-slate-400" />
-                        {scannedResult.serialNo || scannedResult.raw}
-                      </span>
-                    </div>
-                  </div>
-
-                  {quickAddSuccess ? (
-                    <div className="p-3 bg-emerald-100 dark:bg-emerald-950/60 border border-emerald-300 text-emerald-800 dark:text-emerald-200 rounded-xl text-xs font-bold flex items-center gap-2">
-                      <Check className="w-4 h-4 text-emerald-600" />
-                      <span>Item has been registered and added to Store Stock successfully!</span>
-                    </div>
-                  ) : (
-                    /* Add Stock Actions */
-                    <div className="flex flex-wrap items-center gap-2 pt-1">
-                      {onQuickAddItemDirect && (
+                  {matchedOrder.shipment && (
+                    <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-purple-200/60">
+                      {matchedOrder.shipment.status === 'OUT_FOR_DELIVERY' && (
                         <button
                           type="button"
-                          disabled={isQuickAdding}
-                          onClick={() => {
-                            if (onQuickAddItemDirect) {
-                              setIsQuickAdding(true);
-                              onQuickAddItemDirect({
-                                name: `${unregisteredBrand} ${unregisteredModel || 'Air Conditioner'}`,
-                                modelNo: unregisteredModel || 'MODEL-STANDARD',
-                                type: 'AC',
-                                brand: unregisteredBrand,
-                                serialNo: scannedResult.serialNo || scannedResult.raw,
-                                sellingPrice: unregisteredPrice || 45000,
-                              })
-                                .then(() => {
-                                  setQuickAddSuccess(true);
-                                  setTimeout(() => {
-                                    const foundList = findMatchingItems(scannedResult);
-                                    setMatchedItems(foundList);
-                                    if (foundList[0]) setMatchedItem(foundList[0]);
-                                  }, 400);
-                                })
-                                .finally(() => setIsQuickAdding(false));
-                            }
-                          }}
-                          className="px-4 py-2.5 bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white rounded-xl text-xs font-black shadow-xs flex items-center gap-1.5 transition-colors"
+                          onClick={handleMarkArrivedAtStore}
+                          className="px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-xs font-bold shadow-xs transition-colors"
                         >
-                          <Sparkles className="w-4 h-4" />
-                          {isQuickAdding ? 'Adding to Stock...' : '✅ Yes, Add to Store Stock Now'}
+                          Mark Arrived at Store
                         </button>
                       )}
-
-                      <button
-                        type="button"
-                        onClick={() => {
-                          onOpenAddItemWithData({
-                            name: `${unregisteredBrand} ${unregisteredModel || 'Air Conditioner'}`,
-                            modelNo: unregisteredModel || scannedResult.modelNo || '',
-                            brand: unregisteredBrand,
-                            serialNo: scannedResult.serialNo || scannedResult.raw,
-                            price: unregisteredPrice,
-                            type: 'AC',
-                          });
-                          onClose();
-                        }}
-                        className="px-3.5 py-2.5 bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 hover:bg-slate-100 text-slate-800 dark:text-slate-200 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors"
-                      >
-                        <Plus className="w-3.5 h-3.5" />
-                        Open Full Add Form (Prefilled)
-                      </button>
+                      {matchedOrder.shipment.status === 'ARRIVED_AT_STORE' && (
+                        <button
+                          type="button"
+                          onClick={handleMarkDeliveredDone}
+                          className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold shadow-xs transition-colors"
+                        >
+                          Mark Delivered &amp; Installed
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>
               )}
 
-              {/* Reset to Scan Next */}
-              <div className="pt-2 flex items-center justify-between border-t border-slate-100 dark:border-slate-800">
-                <button
-                  type="button"
-                  onClick={startCamera}
-                  className="px-4 py-2 bg-slate-900 hover:bg-black dark:bg-slate-800 dark:hover:bg-slate-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition-colors shadow-xs"
-                >
-                  <RefreshCw className="w-3.5 h-3.5" />
-                  Scan Another Label / QR Code
-                </button>
+              {/* CASE 4: UNREGISTERED ITEM — QUICK INWARD & MARK AS SR / MODEL OPTION */}
+              {matchMode === 'UNREGISTERED' && (
+                <div className="bg-amber-50/70 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/60 rounded-2xl p-4 sm:p-5 space-y-4">
+                  <div className="flex items-start gap-3">
+                    <div className="p-2.5 bg-amber-500 text-white rounded-xl shadow-xs mt-0.5">
+                      <AlertCircle className="w-5 h-5" />
+                    </div>
+                    <div className="flex-1">
+                      <span className="text-[10px] uppercase tracking-wider font-extrabold text-amber-700 dark:text-amber-300 block">
+                        Unregistered Barcode / QR
+                      </span>
+                      <h4 className="font-black text-slate-900 dark:text-white text-base">
+                        Code "{scannedResult.raw}" Not Found in In-Store Stock
+                      </h4>
+                      <p className="text-xs text-slate-600 dark:text-slate-300 mt-0.5">
+                        Choose whether to mark this scanned code as a Serial Number (sr number) or Model Number, and enter it directly into stock.
+                      </p>
+                    </div>
+                  </div>
 
-                <button
-                  type="button"
-                  onClick={onClose}
-                  className="px-4 py-2 text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 text-xs font-bold"
-                >
-                  Done
-                </button>
-              </div>
+                  {/* Mark as SR Number or Model Number Selector */}
+                  <div className="p-3.5 bg-white dark:bg-slate-900 rounded-xl border border-amber-200 dark:border-amber-800/60 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-slate-800 dark:text-slate-200">
+                        Mark this Scanned Value "{scannedResult.raw}" as:
+                      </span>
+                      <span className="text-[10px] uppercase font-black px-2 py-0.5 rounded-full bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300">
+                        {unregisteredRole.replace(/([A-Z])/g, ' $1').toUpperCase()}
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setUnregisteredRole('serialNo')}
+                        className={`py-2 px-2.5 rounded-xl text-xs font-bold border transition-all text-center ${
+                          unregisteredRole === 'serialNo'
+                            ? 'bg-amber-500 text-white border-amber-600 shadow-xs'
+                            : 'bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-100'
+                        }`}
+                      >
+                        Serial No (SR)
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setUnregisteredRole('modelNo')}
+                        className={`py-2 px-2.5 rounded-xl text-xs font-bold border transition-all text-center ${
+                          unregisteredRole === 'modelNo'
+                            ? 'bg-amber-500 text-white border-amber-600 shadow-xs'
+                            : 'bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-100'
+                        }`}
+                      >
+                        Set Model No
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setUnregisteredType('AC');
+                          setUnregisteredRole('indoorModelNo');
+                        }}
+                        className={`py-2 px-2.5 rounded-xl text-xs font-bold border transition-all text-center ${
+                          unregisteredRole === 'indoorModelNo'
+                            ? 'bg-blue-600 text-white border-blue-700 shadow-xs'
+                            : 'bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-100'
+                        }`}
+                      >
+                        Indoor Model (IDU)
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setUnregisteredType('AC');
+                          setUnregisteredRole('outdoorModelNo');
+                        }}
+                        className={`py-2 px-2.5 rounded-xl text-xs font-bold border transition-all text-center ${
+                          unregisteredRole === 'outdoorModelNo'
+                            ? 'bg-indigo-600 text-white border-indigo-700 shadow-xs'
+                            : 'bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-100'
+                        }`}
+                      >
+                        Outdoor Model (ODU)
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setUnregisteredType('AC');
+                          setUnregisteredRole('indoorUnitSerial');
+                        }}
+                        className={`py-2 px-2.5 rounded-xl text-xs font-bold border transition-all text-center ${
+                          unregisteredRole === 'indoorUnitSerial'
+                            ? 'bg-blue-600 text-white border-blue-700 shadow-xs'
+                            : 'bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-100'
+                        }`}
+                      >
+                        Indoor SN (IDU)
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setUnregisteredType('AC');
+                          setUnregisteredRole('outdoorUnitSerial');
+                        }}
+                        className={`py-2 px-2.5 rounded-xl text-xs font-bold border transition-all text-center ${
+                          unregisteredRole === 'outdoorUnitSerial'
+                            ? 'bg-indigo-600 text-white border-indigo-700 shadow-xs'
+                            : 'bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-100'
+                        }`}
+                      >
+                        Outdoor SN (ODU)
+                      </button>
+                    </div>
+
+                    {/* Direct "Enter by Scanning in Adding" Actions */}
+                    <div className="pt-2 border-t border-slate-100 dark:border-slate-800 flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        onClick={handleEnterByScanningInAdd}
+                        className="flex-1 py-2.5 px-3 bg-red-600 hover:bg-red-700 text-white font-bold rounded-xl text-xs shadow-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                        title="Open Add Stock modal with this value pre-filled into the selected field"
+                      >
+                        <Plus className="w-4 h-4" />
+                        <span>
+                          Enter by Scanning into Add Stock Form as{' '}
+                          {unregisteredRole === 'modelNo'
+                            ? 'Model No'
+                            : unregisteredRole === 'indoorModelNo'
+                            ? 'Indoor Model'
+                            : unregisteredRole === 'outdoorModelNo'
+                            ? 'Outdoor Model'
+                            : unregisteredRole === 'indoorUnitSerial'
+                            ? 'Indoor SN'
+                            : unregisteredRole === 'outdoorUnitSerial'
+                            ? 'Outdoor SN'
+                            : 'Serial No (SR)'}
+                        </span>
+                      </button>
+
+                      {onScannedValueExtracted && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            onScannedValueExtracted(scannedResult.raw);
+                            onClose();
+                          }}
+                          className="py-2.5 px-4 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl text-xs shadow-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                        >
+                          <Check className="w-4 h-4" />
+                          <span>Insert into Form Field</span>
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Inline Quick Inward Form with AC Indoor/Outdoor support */}
+                  <div className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-amber-200 dark:border-amber-800/60 space-y-3 text-xs">
+                    <span className="font-bold text-slate-800 dark:text-slate-200 block">
+                      Or Quick Inward into Store Stock Right Here:
+                    </span>
+                    <div className="grid grid-cols-1 sm:grid-cols-4 gap-2">
+                      <div>
+                        <label className="text-[10px] text-slate-400 block font-bold mb-1">Product Type</label>
+                        <select
+                          value={unregisteredType}
+                          onChange={(e) => setUnregisteredType(e.target.value)}
+                          className="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-bold"
+                        >
+                          <option value="AC">AC (Air Conditioner)</option>
+                          <option value="Refrigerator">Refrigerator</option>
+                          <option value="Washing Machine">Washing Machine</option>
+                          <option value="Microwave">Microwave</option>
+                          <option value="TV">TV / Television</option>
+                          <option value="Other">Other Appliance</option>
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="text-[10px] text-slate-400 block font-bold mb-1">Brand</label>
+                        <select
+                          value={unregisteredBrand}
+                          onChange={(e) => setUnregisteredBrand(e.target.value)}
+                          className="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-bold"
+                        >
+                          <option value="Daikin">Daikin</option>
+                          <option value="Voltas">Voltas</option>
+                          <option value="Hitachi">Hitachi</option>
+                          <option value="Mitsubishi">Mitsubishi</option>
+                          <option value="O General">O General</option>
+                          <option value="Carrier">Carrier</option>
+                          <option value="Blue Star">Blue Star</option>
+                          <option value="Panasonic">Panasonic</option>
+                          <option value="LG">LG</option>
+                        </select>
+                      </div>
+
+                      <div>
+                        <label className="text-[10px] text-slate-400 block font-bold mb-1">Model Number</label>
+                        <input
+                          type="text"
+                          value={unregisteredRole === 'modelNo' ? scannedResult.raw : unregisteredModel}
+                          onChange={(e) => setUnregisteredModel(e.target.value)}
+                          placeholder="e.g. FTKM50U"
+                          className="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-mono font-bold"
+                        />
+                      </div>
+
+                      <div>
+                        <label className="text-[10px] text-slate-400 block font-bold mb-1">Selling Price (₹)</label>
+                        <input
+                          type="number"
+                          value={unregisteredPrice}
+                          onChange={(e) => setUnregisteredPrice(Number(e.target.value))}
+                          className="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 font-bold text-emerald-600"
+                        />
+                      </div>
+                    </div>
+
+                    {/* AC: Replace SR number with Indoor & Outdoor Serials */}
+                    {unregisteredType.toUpperCase() === 'AC' ? (
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pt-1 border-t border-slate-100 dark:border-slate-800">
+                        <div>
+                          <label className="text-[10px] text-blue-600 dark:text-blue-400 block font-bold mb-1">
+                            Indoor Unit Serial (IDU):
+                          </label>
+                          <input
+                            type="text"
+                            value={
+                              unregisteredRole === 'indoorUnitSerial' || unregisteredRole === 'serialNo'
+                                ? scannedResult.raw
+                                : unregisteredIndoorSerial
+                            }
+                            onChange={(e) => setUnregisteredIndoorSerial(e.target.value)}
+                            placeholder="Indoor Serial (IDU)"
+                            className="w-full px-2.5 py-1.5 rounded-lg border border-blue-200 dark:border-blue-900 bg-white dark:bg-slate-800 font-mono font-bold"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[10px] text-indigo-600 dark:text-indigo-400 block font-bold mb-1">
+                            Outdoor Unit Serial (ODU):
+                          </label>
+                          <input
+                            type="text"
+                            value={
+                              unregisteredRole === 'outdoorUnitSerial'
+                                ? scannedResult.raw
+                                : unregisteredOutdoorSerial
+                            }
+                            onChange={(e) => setUnregisteredOutdoorSerial(e.target.value)}
+                            placeholder="Outdoor Serial (ODU)"
+                            className="w-full px-2.5 py-1.5 rounded-lg border border-indigo-200 dark:border-indigo-900 bg-white dark:bg-slate-800 font-mono font-bold"
+                          />
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="pt-1 border-t border-slate-100 dark:border-slate-800">
+                        <label className="text-[10px] text-slate-400 block font-bold mb-1">
+                          Carton Serial No:
+                        </label>
+                        <input
+                          type="text"
+                          value={unregisteredRole === 'serialNo' ? scannedResult.raw : unregisteredSerial}
+                          onChange={(e) => setUnregisteredSerial(e.target.value)}
+                          placeholder="Serial No"
+                          className="w-full px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 font-mono font-bold"
+                        />
+                      </div>
+                    )}
+
+                    <button
+                      type="button"
+                      onClick={handleQuickAddDirect}
+                      disabled={isQuickAdding}
+                      className="w-full py-2 bg-red-600 hover:bg-red-700 text-white font-bold rounded-xl text-xs shadow-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                    >
+                      <Plus className="w-4 h-4" />
+                      <span>{isQuickAdding ? 'Inwarding...' : '+ Inward this Unit into In-Store Stock'}</span>
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>

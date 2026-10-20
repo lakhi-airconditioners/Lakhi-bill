@@ -22,6 +22,8 @@ export interface QuotationItem {
   id: string;
   name: string; // Product name e.g. "55-inch 4K Smart OLED TV", "1.5T 5-Star Split AC"
   modelNo: string; // Model number e.g. "OLED55C3PSA"
+  indoorModelNo?: string; // Optional indoor model if AC
+  outdoorModelNo?: string; // Optional outdoor model if AC
   type: string; // Type: AC, TV, Refrigerator, Washing Machine, Microwave, etc.
   brand?: string;
   quantity: number;
@@ -61,6 +63,8 @@ export interface InvoiceLineItem {
   id: string;
   name: string; // Product name
   modelNo: string; // Model number
+  indoorModelNo?: string; // Optional indoor model if AC
+  outdoorModelNo?: string; // Optional outdoor model if AC
   type: string; // Type: AC, TV, Refrigerator, etc.
   brand?: string;
   serialNo?: string; // Single device serial or comma-separated serials
@@ -136,11 +140,17 @@ export interface InventoryItem {
   id: string; // Internal document ID / SKU
   stockId?: string; // Website unique Stock ID for this unit in store (e.g. {sr no}-{id})
   name: string; // Product name
-  modelNo: string; // Model number
+  modelNo: string; // Model number / Set model
+  indoorModelNo?: string; // Indoor unit model number (IDU Model) if AC
+  outdoorModelNo?: string; // Outdoor unit model number (ODU Model) if AC
   type: string; // AC, TV, Refrigerator, Washing Machine, etc.
   brand: string;
   serialNo: string; // Physical carton barcode / serial number (preserved without modification)
+  indoorUnitSerial?: string; // Indoor unit serial number (IDU) if AC
+  outdoorUnitSerial?: string; // Outdoor unit serial number (ODU) if AC
   barcode?: string; // Barcode value
+  barcodeAdded?: boolean; // Set to true when internal barcode is made/printed on physical product
+  barcodePrintedAt?: string; // Timestamp when barcode was marked as printed/added
   status: StockStatus; // AVAILABLE, SOLD, or ARCHIVED
   sellingPrice: number;
   assignedInvoiceId?: string;

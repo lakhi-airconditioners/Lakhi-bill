@@ -236,7 +236,7 @@ export const AiQuotationBuilderModal: React.FC<AiQuotationBuilderModalProps> = (
         <div className="px-5 py-4 border-b border-slate-100 dark:border-slate-800 bg-slate-50 dark:bg-slate-950/60 flex items-center justify-between">
           <div className="flex items-center gap-2.5">
             <div className="p-2 bg-gradient-to-tr from-red-600 to-amber-500 text-white rounded-xl shadow-xs">
-              <Sparkles className="w-4 h-4 animate-spin-slow" />
+              <Sparkles className="w-4 h-4" />
             </div>
             <div>
               <h3 className="font-black text-slate-900 dark:text-white text-base flex items-center gap-2">

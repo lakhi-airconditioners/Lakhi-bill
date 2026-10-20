@@ -101,10 +101,13 @@ export function renderInvoicePage(
     doc.setFontSize(7.5);
     doc.setFont('helvetica', 'normal');
     doc.setTextColor(grayText[0], grayText[1], grayText[2]);
-    const snInfo = item.serialNo
+    const isAc = (item.type || '').toUpperCase() === 'AC';
+    const iduModelStr = item.indoorModelNo ? `[Model: ${item.indoorModelNo}] ` : '';
+    const oduModelStr = item.outdoorModelNo ? `[Model: ${item.outdoorModelNo}] ` : '';
+    const snInfo = isAc
+      ? `Indoor: ${iduModelStr}S/N: ${item.indoorUnitSerial || item.serialNo || '-'} | Outdoor: ${oduModelStr}S/N: ${item.outdoorUnitSerial || '-'}`
+      : item.serialNo
       ? `SN: ${item.serialNo}`
-      : item.indoorUnitSerial || item.outdoorUnitSerial
-      ? `Indoor: ${item.indoorUnitSerial || '-'} | Outdoor: ${item.outdoorUnitSerial || '-'}`
       : 'Serial: Pending Registration';
     doc.text(snInfo, 16, startY + 4);
 

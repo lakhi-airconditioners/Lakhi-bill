@@ -1343,13 +1343,30 @@ export const CustomerPortal: React.FC = () => {
                           <div className="font-bold text-slate-900 dark:text-white">
                             {it.quantity}x {it.name || it.type} ({it.modelNo || 'Standard'})
                           </div>
-                          {(it.serialNo || it.indoorUnitSerial || it.outdoorUnitSerial) && (
-                            <div className="text-[11px] text-slate-400 font-mono mt-0.5">
-                              {it.serialNo && <span>SN: {it.serialNo} </span>}
-                              {it.indoorUnitSerial && <span>Indoor: {it.indoorUnitSerial} </span>}
-                              {it.outdoorUnitSerial && <span>Outdoor: {it.outdoorUnitSerial}</span>}
-                            </div>
-                          )}
+                          {(() => {
+                            const isAc = (it.type || '').toUpperCase() === 'AC';
+                            if (isAc) {
+                              return (
+                                <div className="text-[11px] text-slate-400 font-mono mt-0.5 space-y-0.5">
+                                  <div>
+                                    <span className="text-blue-500 font-medium">IDU:</span>{' '}
+                                    {it.indoorModelNo && <span className="text-slate-300 mr-1">[{it.indoorModelNo}]</span>}
+                                    <span>{it.indoorUnitSerial || it.serialNo || '-'}</span>
+                                  </div>
+                                  <div>
+                                    <span className="text-indigo-500 font-medium">ODU:</span>{' '}
+                                    {it.outdoorModelNo && <span className="text-slate-300 mr-1">[{it.outdoorModelNo}]</span>}
+                                    <span>{it.outdoorUnitSerial || '-'}</span>
+                                  </div>
+                                </div>
+                              );
+                            }
+                            return it.serialNo ? (
+                              <div className="text-[11px] text-slate-400 font-mono mt-0.5">
+                                <span>SN: {it.serialNo}</span>
+                              </div>
+                            ) : null;
+                          })()}
                         </div>
                         <div className="font-bold text-slate-900 dark:text-white">
                           ₹{it.lineTotal.toLocaleString('en-IN')}
@@ -1413,10 +1430,22 @@ export const CustomerPortal: React.FC = () => {
                   </div>
 
                   <div className="p-3 bg-slate-50 dark:bg-slate-800/60 rounded-xl text-xs space-y-1 font-mono">
+                    {u.indoorModelNo && (
+                      <div className="flex justify-between">
+                        <span className="text-slate-400">Indoor Model (IDU):</span>
+                        <strong className="text-blue-600 dark:text-blue-400">{u.indoorModelNo}</strong>
+                      </div>
+                    )}
                     {u.indoorUnitSerial && (
                       <div className="flex justify-between">
                         <span className="text-slate-400">Indoor Unit SN:</span>
                         <strong className="text-slate-900 dark:text-white">{u.indoorUnitSerial}</strong>
+                      </div>
+                    )}
+                    {u.outdoorModelNo && (
+                      <div className="flex justify-between">
+                        <span className="text-slate-400">Outdoor Model (ODU):</span>
+                        <strong className="text-indigo-600 dark:text-indigo-400">{u.outdoorModelNo}</strong>
                       </div>
                     )}
                     {u.outdoorUnitSerial && (
@@ -1425,7 +1454,7 @@ export const CustomerPortal: React.FC = () => {
                         <strong className="text-slate-900 dark:text-white">{u.outdoorUnitSerial}</strong>
                       </div>
                     )}
-                    {u.serialNo && (
+                    {(!u.type || u.type.toUpperCase() !== 'AC') && u.serialNo && (
                       <div className="flex justify-between">
                         <span className="text-slate-400">Serial No:</span>
                         <strong className="text-slate-900 dark:text-white">{u.serialNo}</strong>
@@ -1880,23 +1909,6 @@ export const CustomerPortal: React.FC = () => {
           </div>
         </div>
       )}
-
-      {/* Floating Ask AI Button for Quick Access */}
-      <div className="fixed bottom-6 right-6 z-40">
-        <button
-          onClick={() => setIsAiAssistantOpen(true)}
-          className="group flex items-center gap-2.5 px-4 py-3 bg-gradient-to-r from-red-600 via-rose-600 to-amber-600 text-white rounded-full shadow-lg shadow-red-600/40 hover:shadow-xl hover:scale-105 active:scale-95 transition-all duration-200 font-bold text-xs"
-          title="Ask Lakhi AI about your orders, invoices, or balance"
-        >
-          <div className="w-6 h-6 rounded-full bg-white/20 flex items-center justify-center">
-            <Sparkles className="w-3.5 h-3.5 animate-spin" style={{ animationDuration: '4s' }} />
-          </div>
-          <span>Ask Lakhi AI</span>
-          <span className="hidden sm:inline-block text-[10px] bg-white/20 px-2 py-0.5 rounded-full font-mono">
-            Copilot
-          </span>
-        </button>
-      </div>
 
       {/* In-App Notifications Center Modal */}
       <CustomerNotificationsModal

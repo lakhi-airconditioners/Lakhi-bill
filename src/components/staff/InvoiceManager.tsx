@@ -183,6 +183,8 @@ export const InvoiceManager: React.FC<InvoiceManagerProps> = ({
       id: 'inv-item-1',
       name: '',
       modelNo: '',
+      indoorModelNo: '',
+      outdoorModelNo: '',
       type: 'AC',
       brand: '',
       serialNo: '',
@@ -213,6 +215,8 @@ export const InvoiceManager: React.FC<InvoiceManagerProps> = ({
             id: `conv-item-${idx}`,
             name: it.name,
             modelNo: it.modelNo,
+            indoorModelNo: it.indoorModelNo || '',
+            outdoorModelNo: it.outdoorModelNo || '',
             type: it.type,
             brand: it.brand || '',
             serialNo: '',
@@ -235,15 +239,18 @@ export const InvoiceManager: React.FC<InvoiceManagerProps> = ({
   // Handle incoming stock item to bill from Store Stock
   useEffect(() => {
     if (initialStockItemToBill) {
+      const isAc = (initialStockItemToBill.type || '').toUpperCase() === 'AC';
       const stockItem: InvoiceLineItem = {
         id: `stock-${initialStockItemToBill.id}`,
         name: initialStockItemToBill.name,
         modelNo: initialStockItemToBill.modelNo,
+        indoorModelNo: initialStockItemToBill.indoorModelNo || '',
+        outdoorModelNo: initialStockItemToBill.outdoorModelNo || '',
         type: initialStockItemToBill.type || 'AC',
         brand: initialStockItemToBill.brand || '',
         serialNo: initialStockItemToBill.serialNo || '',
-        indoorUnitSerial: '',
-        outdoorUnitSerial: '',
+        indoorUnitSerial: initialStockItemToBill.indoorUnitSerial || (isAc ? initialStockItemToBill.serialNo : '') || '',
+        outdoorUnitSerial: initialStockItemToBill.outdoorUnitSerial || '',
         quantity: 1,
         rate: initialStockItemToBill.sellingPrice || 0,
         taxPercent: 18,
@@ -295,6 +302,8 @@ export const InvoiceManager: React.FC<InvoiceManagerProps> = ({
                 id: `inv-item-${Date.now()}`,
                 name: '',
                 modelNo: '',
+                indoorModelNo: '',
+                outdoorModelNo: '',
                 type: 'AC',
                 brand: '',
                 serialNo: '',
@@ -311,15 +320,18 @@ export const InvoiceManager: React.FC<InvoiceManagerProps> = ({
       );
     } else {
       setSelectedStockIdsToDeduct([...selectedStockIdsToDeduct, stk.id]);
+      const isAc = (stk.type || '').toUpperCase() === 'AC';
       const newStockLineItem: InvoiceLineItem = {
         id: `stock-${stk.id}`,
         name: stk.name,
         modelNo: stk.modelNo,
+        indoorModelNo: stk.indoorModelNo || '',
+        outdoorModelNo: stk.outdoorModelNo || '',
         type: stk.type || 'AC',
         brand: stk.brand || '',
         serialNo: stk.serialNo || '',
-        indoorUnitSerial: '',
-        outdoorUnitSerial: '',
+        indoorUnitSerial: stk.indoorUnitSerial || (isAc ? stk.serialNo : '') || '',
+        outdoorUnitSerial: stk.outdoorUnitSerial || '',
         quantity: 1,
         rate: stk.sellingPrice || 0,
         taxPercent: 18,
@@ -342,6 +354,8 @@ export const InvoiceManager: React.FC<InvoiceManagerProps> = ({
         id: `inv-item-${Date.now()}`,
         name: '',
         modelNo: '',
+        indoorModelNo: '',
+        outdoorModelNo: '',
         type: 'AC',
         brand: '',
         serialNo: '',
@@ -589,6 +603,8 @@ export const InvoiceManager: React.FC<InvoiceManagerProps> = ({
         id: `edit-item-${Date.now()}`,
         name: '',
         modelNo: '',
+        indoorModelNo: '',
+        outdoorModelNo: '',
         type: 'AC',
         brand: '',
         serialNo: '',
@@ -1124,12 +1140,30 @@ export const InvoiceManager: React.FC<InvoiceManagerProps> = ({
                     </td>
                     <td className="px-4 py-3">
                       <div className="space-y-0.5 max-w-xs">
-                        {inv.items.map((it, idx) => (
-                          <div key={idx} className="text-slate-800 dark:text-slate-200 text-[11px]">
-                            <span className="font-bold">{it.quantity}x</span> {it.name || it.type} ({it.modelNo || 'Std'})
-                            {it.serialNo && <span className="text-[10px] text-slate-400 ml-1">SN: {it.serialNo}</span>}
-                          </div>
-                        ))}
+                        {inv.items.map((it, idx) => {
+                          const isAc = (it.type || '').toUpperCase() === 'AC';
+                          return (
+                            <div key={idx} className="text-slate-800 dark:text-slate-200 text-[11px]">
+                              <span className="font-bold">{it.quantity}x</span> {it.name || it.type} ({it.modelNo || 'Std'})
+                              {isAc ? (
+                                <div className="text-[10px] text-slate-500 font-mono space-y-0.5 mt-0.5">
+                                  <div>
+                                    <span className="text-blue-600 dark:text-blue-400 font-semibold">IDU:</span>{' '}
+                                    {it.indoorModelNo && <span className="font-bold mr-1">[{it.indoorModelNo}]</span>}
+                                    <span>SN: {it.indoorUnitSerial || it.serialNo || '-'}</span>
+                                  </div>
+                                  <div>
+                                    <span className="text-indigo-600 dark:text-indigo-400 font-semibold">ODU:</span>{' '}
+                                    {it.outdoorModelNo && <span className="font-bold mr-1">[{it.outdoorModelNo}]</span>}
+                                    <span>SN: {it.outdoorUnitSerial || '-'}</span>
+                                  </div>
+                                </div>
+                              ) : it.serialNo ? (
+                                <span className="text-[10px] text-slate-400 ml-1">SN: {it.serialNo}</span>
+                              ) : null}
+                            </div>
+                          );
+                        })}
                       </div>
                     </td>
                     <td className="px-4 py-3">
@@ -1655,8 +1689,66 @@ export const InvoiceManager: React.FC<InvoiceManagerProps> = ({
                         </div>
                       </div>
 
-                      {/* Serials Input */}
-                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                      {/* Serials & Models Input: If AC, show Indoor & Outdoor Model No + Serial No */}
+                      {item.type?.toUpperCase() === 'AC' ? (
+                        <div className="p-2.5 rounded-xl bg-blue-50/50 dark:bg-blue-950/20 border border-blue-100 dark:border-blue-900/40 space-y-2">
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                            <div>
+                              <label className="block text-[10px] font-bold text-blue-600 dark:text-blue-400 uppercase">
+                                Indoor Model No (IDU):
+                              </label>
+                              <input
+                                type="text"
+                                value={item.indoorModelNo || ''}
+                                onChange={(e) => handleItemChange(index, 'indoorModelNo', e.target.value)}
+                                placeholder="e.g. FTKF50TV"
+                                className="w-full text-xs font-mono px-2.5 py-1.5 border border-blue-200 dark:border-blue-900 bg-white dark:bg-slate-800 rounded-lg text-slate-900 dark:text-white"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-[10px] font-bold text-blue-600 dark:text-blue-400 uppercase">
+                                Indoor Unit SN (IDU):
+                              </label>
+                              <input
+                                type="text"
+                                value={item.indoorUnitSerial || ''}
+                                onChange={(e) => {
+                                  handleItemChange(index, 'indoorUnitSerial', e.target.value);
+                                  handleItemChange(index, 'serialNo', e.target.value);
+                                }}
+                                placeholder="e.g. IDU-882190"
+                                className="w-full text-xs font-mono px-2.5 py-1.5 border border-blue-200 dark:border-blue-900 bg-white dark:bg-slate-800 rounded-lg text-slate-900 dark:text-white"
+                              />
+                            </div>
+                          </div>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                            <div>
+                              <label className="block text-[10px] font-bold text-indigo-600 dark:text-indigo-400 uppercase">
+                                Outdoor Model No (ODU):
+                              </label>
+                              <input
+                                type="text"
+                                value={item.outdoorModelNo || ''}
+                                onChange={(e) => handleItemChange(index, 'outdoorModelNo', e.target.value)}
+                                placeholder="e.g. RKF50TV"
+                                className="w-full text-xs font-mono px-2.5 py-1.5 border border-indigo-200 dark:border-indigo-900 bg-white dark:bg-slate-800 rounded-lg text-slate-900 dark:text-white"
+                              />
+                            </div>
+                            <div>
+                              <label className="block text-[10px] font-bold text-indigo-600 dark:text-indigo-400 uppercase">
+                                Outdoor Unit SN (ODU):
+                              </label>
+                              <input
+                                type="text"
+                                value={item.outdoorUnitSerial || ''}
+                                onChange={(e) => handleItemChange(index, 'outdoorUnitSerial', e.target.value)}
+                                placeholder="e.g. ODU-882191"
+                                className="w-full text-xs font-mono px-2.5 py-1.5 border border-indigo-200 dark:border-indigo-900 bg-white dark:bg-slate-800 rounded-lg text-slate-900 dark:text-white"
+                              />
+                            </div>
+                          </div>
+                        </div>
+                      ) : (
                         <div>
                           <label className="block text-[10px] font-bold text-slate-600 dark:text-slate-400 uppercase">
                             Device Serial No:
@@ -1669,33 +1761,7 @@ export const InvoiceManager: React.FC<InvoiceManagerProps> = ({
                             className="w-full text-xs font-mono px-2.5 py-1.5 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 rounded-lg text-slate-900 dark:text-white"
                           />
                         </div>
-
-                        <div>
-                          <label className="block text-[10px] font-bold text-slate-600 dark:text-slate-400 uppercase">
-                            Indoor Unit SN (If AC):
-                          </label>
-                          <input
-                            type="text"
-                            value={item.indoorUnitSerial}
-                            onChange={(e) => handleItemChange(index, 'indoorUnitSerial', e.target.value)}
-                            placeholder="Indoor SN"
-                            className="w-full text-xs font-mono px-2.5 py-1.5 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 rounded-lg text-slate-900 dark:text-white"
-                          />
-                        </div>
-
-                        <div>
-                          <label className="block text-[10px] font-bold text-slate-600 dark:text-slate-400 uppercase">
-                            Outdoor Unit SN (If AC):
-                          </label>
-                          <input
-                            type="text"
-                            value={item.outdoorUnitSerial}
-                            onChange={(e) => handleItemChange(index, 'outdoorUnitSerial', e.target.value)}
-                            placeholder="Outdoor SN"
-                            className="w-full text-xs font-mono px-2.5 py-1.5 border border-slate-300 dark:border-slate-600 bg-white dark:bg-slate-800 rounded-lg text-slate-900 dark:text-white"
-                          />
-                        </div>
-                      </div>
+                      )}
 
                       {/* Pricing with "Enter Amount With Tax" Option */}
                       <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 items-end">
@@ -2387,44 +2453,91 @@ export const InvoiceManager: React.FC<InvoiceManagerProps> = ({
                         </div>
                       </div>
 
-                      {/* Serials row */}
-                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-1 border-t border-slate-200 dark:border-slate-700/60">
-                        <div>
-                          <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">
-                            Machine Serial No:
-                          </label>
-                          <input
-                            type="text"
-                            value={item.serialNo || ''}
-                            onChange={(e) => handleEditItemChange(index, 'serialNo', e.target.value)}
-                            placeholder="SN123456"
-                            className="w-full text-xs font-mono px-2.5 py-1.5 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
-                          />
-                        </div>
+                      {/* Serials & Models row: If AC, show Indoor and Outdoor Model No + Serial No */}
+                      {item.type?.toUpperCase() === 'AC' ? (
+                        <div className="p-2.5 rounded-xl bg-blue-50/50 dark:bg-blue-950/20 border border-blue-100 dark:border-blue-900/40 space-y-2 mt-2">
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                            <div>
+                              <label className="text-[10px] font-bold text-blue-600 dark:text-blue-400 uppercase block mb-1">
+                                Indoor Model No (IDU):
+                              </label>
+                              <input
+                                type="text"
+                                value={item.indoorModelNo || ''}
+                                onChange={(e) => handleEditItemChange(index, 'indoorModelNo', e.target.value)}
+                                placeholder="e.g. FTKF50TV"
+                                className="w-full text-xs font-mono px-2.5 py-1.5 border border-blue-200 dark:border-blue-900 rounded-xl bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
+                              />
+                            </div>
+                            <div>
+                              <label className="text-[10px] font-bold text-blue-600 dark:text-blue-400 uppercase block mb-1">
+                                Indoor Unit Serial (IDU):
+                              </label>
+                              <input
+                                type="text"
+                                value={item.indoorUnitSerial || ''}
+                                onChange={(e) => {
+                                  handleEditItemChange(index, 'indoorUnitSerial', e.target.value);
+                                  handleEditItemChange(index, 'serialNo', e.target.value);
+                                }}
+                                placeholder="IDU-SN..."
+                                className="w-full text-xs font-mono px-2.5 py-1.5 border border-blue-200 dark:border-blue-900 rounded-xl bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
+                              />
+                            </div>
+                          </div>
 
-                        <div>
-                          <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">
-                            Indoor Unit Serial (AC):
-                          </label>
-                          <input
-                            type="text"
-                            value={item.indoorUnitSerial || ''}
-                            onChange={(e) => handleEditItemChange(index, 'indoorUnitSerial', e.target.value)}
-                            placeholder="IDU-SN..."
-                            className="w-full text-xs font-mono px-2.5 py-1.5 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
-                          />
-                        </div>
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                            <div>
+                              <label className="text-[10px] font-bold text-indigo-600 dark:text-indigo-400 uppercase block mb-1">
+                                Outdoor Model No (ODU):
+                              </label>
+                              <input
+                                type="text"
+                                value={item.outdoorModelNo || ''}
+                                onChange={(e) => handleEditItemChange(index, 'outdoorModelNo', e.target.value)}
+                                placeholder="e.g. RKF50TV"
+                                className="w-full text-xs font-mono px-2.5 py-1.5 border border-indigo-200 dark:border-indigo-900 rounded-xl bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
+                              />
+                            </div>
 
-                        <div className="flex items-end gap-2">
+                            <div className="flex items-end gap-2">
+                              <div className="flex-1">
+                                <label className="text-[10px] font-bold text-indigo-600 dark:text-indigo-400 uppercase block mb-1">
+                                  Outdoor Unit Serial (ODU):
+                                </label>
+                                <input
+                                  type="text"
+                                  value={item.outdoorUnitSerial || ''}
+                                  onChange={(e) => handleEditItemChange(index, 'outdoorUnitSerial', e.target.value)}
+                                  placeholder="ODU-SN..."
+                                  className="w-full text-xs font-mono px-2.5 py-1.5 border border-indigo-200 dark:border-indigo-900 rounded-xl bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
+                                />
+                              </div>
+
+                              {editItems.length > 1 && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleRemoveEditItem(index)}
+                                  className="p-2 text-red-500 hover:text-red-700 hover:bg-red-50 dark:hover:bg-red-950/40 rounded-xl"
+                                  title="Delete Item"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="flex items-end gap-2 pt-1 border-t border-slate-200 dark:border-slate-700/60">
                           <div className="flex-1">
                             <label className="text-[10px] font-bold text-slate-500 uppercase block mb-1">
-                              Outdoor Unit Serial (AC):
+                              Device Serial No:
                             </label>
                             <input
                               type="text"
-                              value={item.outdoorUnitSerial || ''}
-                              onChange={(e) => handleEditItemChange(index, 'outdoorUnitSerial', e.target.value)}
-                              placeholder="ODU-SN..."
+                              value={item.serialNo || ''}
+                              onChange={(e) => handleEditItemChange(index, 'serialNo', e.target.value)}
+                              placeholder="SN123456"
                               className="w-full text-xs font-mono px-2.5 py-1.5 border border-slate-200 dark:border-slate-700 rounded-xl bg-white dark:bg-slate-800 text-slate-900 dark:text-white"
                             />
                           </div>
@@ -2440,7 +2553,7 @@ export const InvoiceManager: React.FC<InvoiceManagerProps> = ({
                             </button>
                           )}
                         </div>
-                      </div>
+                      )}
                     </div>
                   ))}
                 </div>

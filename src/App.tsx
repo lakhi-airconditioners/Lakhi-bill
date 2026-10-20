@@ -129,7 +129,15 @@ function MainApp() {
   ];
 
   return (
-    <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col font-sans transition-colors duration-200">
+    <div
+      className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col font-sans transition-colors duration-200"
+      style={{
+        paddingTop: 'var(--sat)',
+        paddingRight: 'var(--sar)',
+        paddingBottom: 'var(--sab)',
+        paddingLeft: 'var(--sal)',
+      }}
+    >
       <Header
         onOpenClaimsModal={() => setActiveStaffTab('claims')}
         onOpenAiAssistant={() => setIsAiDrawerOpen(true)}

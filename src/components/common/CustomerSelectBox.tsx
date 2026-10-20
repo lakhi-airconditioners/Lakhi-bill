@@ -398,7 +398,7 @@ export const CustomerSelectBox: React.FC<CustomerSelectBoxProps> = ({
                 <div className="pt-1 space-y-2">
                   {autoOpenCountdown !== null && (
                     <div className="flex items-center justify-center gap-1.5 text-[11px] font-bold text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/40 py-1 px-2.5 rounded-lg border border-amber-200 dark:border-amber-900">
-                      <Clock className="w-3.5 h-3.5 animate-spin" />
+                      <Clock className="w-3.5 h-3.5 text-amber-600 dark:text-amber-400" />
                       <span>Auto-opening New Customer form in {autoOpenCountdown}s...</span>
                     </div>
                   )}
