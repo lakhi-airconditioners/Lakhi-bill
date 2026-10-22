@@ -26,6 +26,7 @@ import {
 } from 'lucide-react';
 import { InventoryItem, Shipment, Invoice } from '../../types';
 import { scanCanvasForCodes, scanImageForCodes } from '../../utils/scannerHelper';
+import { detectAcBarcodeDetails, extractCleanValueForTarget } from '../../utils/acScannerHelper';
 
 interface InventoryQrScannerModalProps {
   isOpen: boolean;
@@ -84,14 +85,24 @@ interface InventoryQrScannerModalProps {
 
 interface ParsedQrResult {
   raw: string;
+  cleanValue?: string;
   stockId?: string;
   name?: string;
   modelNo?: string;
+  indoorModelNo?: string;
+  outdoorModelNo?: string;
   brand?: string;
   type?: string;
   serialNo?: string;
+  indoorUnitSerial?: string;
+  outdoorUnitSerial?: string;
   price?: number;
   format?: string;
+  detectedRole?: 'serialNo' | 'modelNo' | 'indoorModelNo' | 'outdoorModelNo' | 'indoorUnitSerial' | 'outdoorUnitSerial';
+  detectedAcType?: 'IDU' | 'ODU' | 'SET' | 'COMBINED' | 'OTHER';
+  detectionReason?: string;
+  badgeTitle?: string;
+  badgeColor?: 'blue' | 'indigo' | 'emerald' | 'purple' | 'amber' | 'slate';
 }
 
 export const InventoryQrScannerModal: React.FC<InventoryQrScannerModalProps> = ({
@@ -191,23 +202,59 @@ export const InventoryQrScannerModal: React.FC<InventoryQrScannerModalProps> = (
     }
   };
 
-  // Helper to parse QR text or barcode text (supports JSON, Key-Value, URL or raw Serial/Model/StockId)
+  // Helper to parse QR text or barcode text (supports AC IDU/ODU intelligence, JSON, Key-Value, URL or raw Serial/Model/StockId)
   const parseCodeText = (rawText: string, format?: string): ParsedQrResult => {
     const raw = rawText.trim();
     let result: ParsedQrResult = { raw, format };
+
+    // 0. Run AC Industry Intelligence Detector (checks IDU/ODU models, serials, brands)
+    const acDetails = detectAcBarcodeDetails(raw);
+    if (acDetails.classification !== 'UNKNOWN') {
+      result.cleanValue = acDetails.extractedValues.cleanValue;
+      result.detectedRole =
+        acDetails.classification === 'IDU_SERIAL'
+          ? 'indoorUnitSerial'
+          : acDetails.classification === 'ODU_SERIAL'
+          ? 'outdoorUnitSerial'
+          : acDetails.classification === 'IDU_MODEL'
+          ? 'indoorModelNo'
+          : acDetails.classification === 'ODU_MODEL'
+          ? 'outdoorModelNo'
+          : acDetails.classification === 'SET_MODEL'
+          ? 'modelNo'
+          : 'serialNo';
+      result.detectedAcType = acDetails.acUnitType;
+      result.detectionReason = acDetails.reason;
+      result.badgeTitle = acDetails.badgeTitle;
+      result.badgeColor = acDetails.badgeColor;
+
+      if (acDetails.extractedValues.indoorModelNo) result.indoorModelNo = acDetails.extractedValues.indoorModelNo;
+      if (acDetails.extractedValues.outdoorModelNo) result.outdoorModelNo = acDetails.extractedValues.outdoorModelNo;
+      if (acDetails.extractedValues.indoorUnitSerial) result.indoorUnitSerial = acDetails.extractedValues.indoorUnitSerial;
+      if (acDetails.extractedValues.outdoorUnitSerial) result.outdoorUnitSerial = acDetails.extractedValues.outdoorUnitSerial;
+      if (acDetails.extractedValues.modelNo) result.modelNo = acDetails.extractedValues.modelNo;
+      if (acDetails.extractedValues.serialNo) result.serialNo = acDetails.extractedValues.serialNo;
+      if (acDetails.extractedValues.brand) result.brand = acDetails.extractedValues.brand;
+      if (acDetails.extractedValues.type) result.type = acDetails.extractedValues.type;
+      if (acDetails.extractedValues.stockId) result.stockId = acDetails.extractedValues.stockId;
+    }
 
     // 1. Try JSON
     if ((raw.startsWith('{') && raw.endsWith('}')) || (raw.startsWith('[') && raw.endsWith(']'))) {
       try {
         const obj = JSON.parse(raw);
         if (typeof obj === 'object' && obj !== null) {
-          result.stockId = obj.stockId || obj.stock_id || obj.stockID;
-          result.name = obj.name || obj.productName || obj.title;
-          result.modelNo = obj.modelNo || obj.model || obj.modelNumber || obj.itemCode;
-          result.brand = obj.brand || obj.manufacturer || obj.make;
-          result.type = obj.type || obj.category || 'AC';
-          result.serialNo = obj.serialNo || obj.serial || obj.sn || obj.sno || obj.id;
-          result.price = Number(obj.price || obj.sellingPrice || obj.mrp) || undefined;
+          result.stockId = obj.stockId || obj.stock_id || obj.stockID || result.stockId;
+          result.name = obj.name || obj.productName || obj.title || result.name;
+          result.modelNo = obj.modelNo || obj.model || obj.modelNumber || obj.itemCode || result.modelNo;
+          result.indoorModelNo = obj.indoorModelNo || obj.iduModel || result.indoorModelNo;
+          result.outdoorModelNo = obj.outdoorModelNo || obj.oduModel || result.outdoorModelNo;
+          result.brand = obj.brand || obj.manufacturer || obj.make || result.brand;
+          result.type = obj.type || obj.category || result.type || 'AC';
+          result.serialNo = obj.serialNo || obj.serial || obj.sn || obj.sno || obj.id || result.serialNo;
+          result.indoorUnitSerial = obj.indoorUnitSerial || obj.iduSerial || obj.iduSn || result.indoorUnitSerial;
+          result.outdoorUnitSerial = obj.outdoorUnitSerial || obj.oduSerial || obj.oduSn || result.outdoorUnitSerial;
+          result.price = Number(obj.price || obj.sellingPrice || obj.mrp) || result.price || undefined;
           return result;
         }
       } catch {
@@ -215,8 +262,8 @@ export const InventoryQrScannerModal: React.FC<InventoryQrScannerModalProps> = (
       }
     }
 
-    // 2. Try Key-Value lines (e.g. STOCK_ID: XYZ, MODEL: ABC, SN: 123)
-    const lines = raw.split(/[\r\n;,]+/);
+    // 2. Try Key-Value lines (e.g. STOCK_ID: XYZ, MODEL: ABC, SN: 123, IDU_SN: 456, ODU_SN: 789)
+    const lines = raw.split(/[\r\n;,|]+/);
     let matchedLines = false;
     lines.forEach((line) => {
       const parts = line.split(/[:=]/);
@@ -226,6 +273,16 @@ export const InventoryQrScannerModal: React.FC<InventoryQrScannerModalProps> = (
         if (['STOCKID', 'STOCK_ID', 'STOCK', 'SKU'].includes(key)) {
           result.stockId = val;
           matchedLines = true;
+        } else if (['IDU_MODEL', 'IDUMODEL', 'INDOOR_MODEL', 'INDOORMODEL', 'IU_MODEL'].includes(key)) {
+          result.indoorModelNo = val;
+          result.detectedRole = 'indoorModelNo';
+          result.detectedAcType = 'IDU';
+          matchedLines = true;
+        } else if (['ODU_MODEL', 'ODUMODEL', 'OUTDOOR_MODEL', 'OUTDOORMODEL', 'OU_MODEL'].includes(key)) {
+          result.outdoorModelNo = val;
+          result.detectedRole = 'outdoorModelNo';
+          result.detectedAcType = 'ODU';
+          matchedLines = true;
         } else if (['MODEL', 'MODELNO', 'MODEL_NO', 'MODEL NUMBER'].includes(key)) {
           result.modelNo = val;
           matchedLines = true;
@@ -234,6 +291,16 @@ export const InventoryQrScannerModal: React.FC<InventoryQrScannerModalProps> = (
           matchedLines = true;
         } else if (['BRAND', 'MAKE', 'MFR'].includes(key)) {
           result.brand = val;
+          matchedLines = true;
+        } else if (['IDU_SN', 'IDUSN', 'IDU_SERIAL', 'INDOOR_SN', 'INDOOR_SERIAL', 'IU_SN'].includes(key)) {
+          result.indoorUnitSerial = val;
+          result.detectedRole = 'indoorUnitSerial';
+          result.detectedAcType = 'IDU';
+          matchedLines = true;
+        } else if (['ODU_SN', 'ODUSN', 'ODU_SERIAL', 'OUTDOOR_SN', 'OUTDOOR_SERIAL', 'OU_SN'].includes(key)) {
+          result.outdoorUnitSerial = val;
+          result.detectedRole = 'outdoorUnitSerial';
+          result.detectedAcType = 'ODU';
           matchedLines = true;
         } else if (['SN', 'SERIAL', 'SERIALNO', 'SERIAL_NO', 'BARCODE'].includes(key)) {
           result.serialNo = val;
@@ -255,12 +322,20 @@ export const InventoryQrScannerModal: React.FC<InventoryQrScannerModalProps> = (
       try {
         const url = new URL(raw);
         const sn = url.searchParams.get('sn') || url.searchParams.get('serial') || url.searchParams.get('item');
+        const iduSn = url.searchParams.get('idu_sn') || url.searchParams.get('idusn');
+        const oduSn = url.searchParams.get('odu_sn') || url.searchParams.get('odusn');
         const model = url.searchParams.get('model') || url.searchParams.get('m');
+        const iduModel = url.searchParams.get('idu_model') || url.searchParams.get('idumodel');
+        const oduModel = url.searchParams.get('odu_model') || url.searchParams.get('odumodel');
         const stId = url.searchParams.get('stock') || url.searchParams.get('stockId');
-        if (sn || model || stId) {
+        if (sn || model || stId || iduSn || oduSn || iduModel || oduModel) {
           result.stockId = stId || undefined;
           result.serialNo = sn || undefined;
+          result.indoorUnitSerial = iduSn || undefined;
+          result.outdoorUnitSerial = oduSn || undefined;
           result.modelNo = model || undefined;
+          result.indoorModelNo = iduModel || undefined;
+          result.outdoorModelNo = oduModel || undefined;
           return result;
         }
       } catch {
@@ -268,14 +343,14 @@ export const InventoryQrScannerModal: React.FC<InventoryQrScannerModalProps> = (
       }
     }
 
-    // 4. Raw string heuristics
-    if (/^LAK[-_]/i.test(raw) || /^STOCK[-_]/i.test(raw)) {
+    // 4. Raw string heuristics fallback
+    if (!result.stockId && (/^LAK[-_]/i.test(raw) || /^STOCK[-_]/i.test(raw))) {
       result.stockId = raw;
-    } else if (/^SN[-_:]/i.test(raw)) {
+    } else if (!result.serialNo && /^SN[-_:]/i.test(raw)) {
       result.serialNo = raw;
     } else {
-      result.serialNo = raw;
-      result.modelNo = raw;
+      if (!result.serialNo) result.serialNo = raw;
+      if (!result.modelNo) result.modelNo = raw;
     }
 
     return result;
@@ -524,9 +599,18 @@ export const InventoryQrScannerModal: React.FC<InventoryQrScannerModalProps> = (
     setModelGroupUnits([]);
     setMatchedOrder(null);
 
-    // Pre-seed quick add form
+    // Pre-seed quick add form with AC IDU/ODU intelligence
     if (parsed.brand) setUnregisteredBrand(parsed.brand);
     if (parsed.modelNo) setUnregisteredModel(parsed.modelNo);
+    if (parsed.indoorModelNo) setUnregisteredIndoorModel(parsed.indoorModelNo);
+    if (parsed.outdoorModelNo) setUnregisteredOutdoorModel(parsed.outdoorModelNo);
+    if (parsed.indoorUnitSerial) setUnregisteredIndoorSerial(parsed.indoorUnitSerial);
+    if (parsed.outdoorUnitSerial) setUnregisteredOutdoorSerial(parsed.outdoorUnitSerial);
+    if (parsed.serialNo) setUnregisteredSerial(parsed.serialNo);
+    if (parsed.detectedRole) setUnregisteredRole(parsed.detectedRole);
+    if (parsed.detectedAcType === 'IDU' || parsed.detectedAcType === 'ODU' || parsed.detectedAcType === 'COMBINED') {
+      setUnregisteredType('AC');
+    }
     if (parsed.price) setUnregisteredPrice(parsed.price);
   };
 
@@ -540,7 +624,9 @@ export const InventoryQrScannerModal: React.FC<InventoryQrScannerModalProps> = (
 
     // If modal was opened specifically to scan for an input field
     if (onScannedValueExtracted && scanTargetPrompt) {
-      onScannedValueExtracted(decodedString.trim());
+      const cleanVal = extractCleanValueForTarget(decodedString, scanTargetPrompt);
+      const acDetails = detectAcBarcodeDetails(decodedString);
+      onScannedValueExtracted(cleanVal, acDetails.classification);
       onClose();
       setIsProcessing(false);
       return;
@@ -813,24 +899,34 @@ export const InventoryQrScannerModal: React.FC<InventoryQrScannerModalProps> = (
     setIsQuickAdding(true);
     try {
       const isAc = unregisteredType.toUpperCase() === 'AC';
-      const effModel = unregisteredRole === 'modelNo' ? scannedResult.raw : (unregisteredModel || 'MODEL-101');
+      const cleanVal = scannedResult.cleanValue || scannedResult.raw;
+      const effModel =
+        unregisteredRole === 'modelNo'
+          ? (scannedResult.modelNo || cleanVal)
+          : (unregisteredModel || scannedResult.modelNo || 'FTKF50TV');
       const effIndoorModel = isAc
-        ? (unregisteredRole === 'indoorModelNo' ? scannedResult.raw : (unregisteredIndoorModel || undefined))
+        ? unregisteredRole === 'indoorModelNo'
+          ? (scannedResult.indoorModelNo || cleanVal)
+          : (unregisteredIndoorModel || scannedResult.indoorModelNo || `${effModel}-IDU`)
         : undefined;
       const effOutdoorModel = isAc
-        ? (unregisteredRole === 'outdoorModelNo' ? scannedResult.raw : (unregisteredOutdoorModel || undefined))
+        ? unregisteredRole === 'outdoorModelNo'
+          ? (scannedResult.outdoorModelNo || cleanVal)
+          : (unregisteredOutdoorModel || scannedResult.outdoorModelNo || `${effModel}-ODU`)
         : undefined;
       const effIndoor = isAc
-        ? (unregisteredRole === 'indoorUnitSerial' || unregisteredRole === 'serialNo'
-            ? scannedResult.raw
-            : (unregisteredIndoorSerial || scannedResult.raw))
+        ? unregisteredRole === 'indoorUnitSerial'
+          ? (scannedResult.indoorUnitSerial || cleanVal)
+          : (unregisteredIndoorSerial || scannedResult.indoorUnitSerial || (unregisteredRole === 'serialNo' ? cleanVal : undefined))
         : undefined;
       const effOutdoor = isAc
-        ? (unregisteredRole === 'outdoorUnitSerial' ? scannedResult.raw : (unregisteredOutdoorSerial || ''))
+        ? unregisteredRole === 'outdoorUnitSerial'
+          ? (scannedResult.outdoorUnitSerial || cleanVal)
+          : (unregisteredOutdoorSerial || scannedResult.outdoorUnitSerial || undefined)
         : undefined;
       const effSerial = isAc
-        ? (effIndoor || effOutdoor || scannedResult.raw)
-        : (unregisteredRole === 'serialNo' ? scannedResult.raw : (unregisteredSerial || scannedResult.raw));
+        ? (effIndoor || effOutdoor || cleanVal)
+        : (unregisteredRole === 'serialNo' ? cleanVal : (unregisteredSerial || cleanVal));
 
       const itemToSave = {
         name: `${unregisteredBrand} ${effModel} ${isAc ? 'Inverter Split AC' : 'Appliance'}`,
@@ -857,30 +953,44 @@ export const InventoryQrScannerModal: React.FC<InventoryQrScannerModalProps> = (
   const handleEnterByScanningInAdd = () => {
     if (!scannedResult) return;
     const isAc = unregisteredType.toUpperCase() === 'AC';
+    const cleanVal = scannedResult.cleanValue || scannedResult.raw;
+    const effModel =
+      unregisteredRole === 'modelNo'
+        ? (scannedResult.modelNo || cleanVal)
+        : (unregisteredModel || scannedResult.modelNo);
+    const effIndoorModel = isAc
+      ? unregisteredRole === 'indoorModelNo'
+        ? (scannedResult.indoorModelNo || cleanVal)
+        : (unregisteredIndoorModel || scannedResult.indoorModelNo || undefined)
+      : undefined;
+    const effOutdoorModel = isAc
+      ? unregisteredRole === 'outdoorModelNo'
+        ? (scannedResult.outdoorModelNo || cleanVal)
+        : (unregisteredOutdoorModel || scannedResult.outdoorModelNo || undefined)
+      : undefined;
+    const effIndoor = isAc
+      ? unregisteredRole === 'indoorUnitSerial'
+        ? (scannedResult.indoorUnitSerial || cleanVal)
+        : (unregisteredIndoorSerial || scannedResult.indoorUnitSerial || (unregisteredRole === 'serialNo' ? cleanVal : undefined))
+      : undefined;
+    const effOutdoor = isAc
+      ? unregisteredRole === 'outdoorUnitSerial'
+        ? (scannedResult.outdoorUnitSerial || cleanVal)
+        : (unregisteredOutdoorSerial || scannedResult.outdoorUnitSerial || undefined)
+      : undefined;
+    const effSerial = isAc
+      ? (effIndoor || effOutdoor || cleanVal)
+      : (unregisteredRole === 'serialNo' ? cleanVal : (unregisteredSerial || cleanVal));
+
     onOpenAddItemWithData({
       type: unregisteredType,
       brand: unregisteredBrand,
-      modelNo: unregisteredRole === 'modelNo' ? scannedResult.raw : unregisteredModel,
-      indoorModelNo: isAc
-        ? (unregisteredRole === 'indoorModelNo' ? scannedResult.raw : (unregisteredIndoorModel || undefined))
-        : undefined,
-      outdoorModelNo: isAc
-        ? (unregisteredRole === 'outdoorModelNo' ? scannedResult.raw : (unregisteredOutdoorModel || undefined))
-        : undefined,
-      serialNo:
-        unregisteredRole === 'serialNo' || unregisteredRole === 'indoorUnitSerial'
-          ? scannedResult.raw
-          : unregisteredSerial,
-      indoorUnitSerial: isAc
-        ? unregisteredRole === 'indoorUnitSerial' || unregisteredRole === 'serialNo'
-          ? scannedResult.raw
-          : unregisteredIndoorSerial
-        : undefined,
-      outdoorUnitSerial: isAc
-        ? unregisteredRole === 'outdoorUnitSerial'
-          ? scannedResult.raw
-          : unregisteredOutdoorSerial
-        : undefined,
+      modelNo: effModel,
+      indoorModelNo: effIndoorModel,
+      outdoorModelNo: effOutdoorModel,
+      serialNo: effSerial,
+      indoorUnitSerial: effIndoor,
+      outdoorUnitSerial: effOutdoor,
       price: unregisteredPrice,
     });
     onClose();
@@ -1105,6 +1215,76 @@ export const InventoryQrScannerModal: React.FC<InventoryQrScannerModalProps> = (
                   <span>Scan Next</span>
                 </button>
               </div>
+
+              {/* Intelligent AC IDU / ODU Detection Banner */}
+              {scannedResult.badgeTitle && (
+                <div
+                  className={`p-3.5 rounded-2xl border text-xs flex flex-wrap items-center justify-between gap-2 shadow-xs transition-all ${
+                    scannedResult.detectedAcType === 'IDU'
+                      ? 'bg-blue-50 dark:bg-blue-950/40 border-blue-300 dark:border-blue-800 text-blue-950 dark:text-blue-100'
+                      : scannedResult.detectedAcType === 'ODU'
+                      ? 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-300 dark:border-emerald-800 text-emerald-950 dark:text-emerald-100'
+                      : scannedResult.detectedAcType === 'COMBINED'
+                      ? 'bg-purple-50 dark:bg-purple-950/40 border-purple-300 dark:border-purple-800 text-purple-950 dark:text-purple-100'
+                      : 'bg-slate-100 dark:bg-slate-800/80 border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-200'
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="font-black text-sm">{scannedResult.badgeTitle}</span>
+                    {scannedResult.detectionReason && (
+                      <span className="text-[11px] opacity-80 hidden sm:inline">• {scannedResult.detectionReason}</span>
+                    )}
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <span
+                      className={`px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider ${
+                        scannedResult.detectedAcType === 'IDU'
+                          ? 'bg-blue-600 text-white'
+                          : scannedResult.detectedAcType === 'ODU'
+                          ? 'bg-emerald-600 text-white'
+                          : scannedResult.detectedAcType === 'COMBINED'
+                          ? 'bg-purple-600 text-white'
+                          : 'bg-slate-700 text-white'
+                      }`}
+                    >
+                      {scannedResult.detectedAcType ? `${scannedResult.detectedAcType} UNIT` : 'DETECTED'}
+                    </span>
+
+                    {/* Quick 1-Click Swap Button between IDU and ODU */}
+                    {(scannedResult.detectedAcType === 'IDU' || scannedResult.detectedAcType === 'ODU') && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const nextType = scannedResult.detectedAcType === 'IDU' ? 'ODU' : 'IDU';
+                          const isSerial =
+                            unregisteredRole === 'indoorUnitSerial' ||
+                            unregisteredRole === 'outdoorUnitSerial' ||
+                            unregisteredRole === 'serialNo';
+                          const nextRole =
+                            nextType === 'IDU'
+                              ? isSerial
+                                ? 'indoorUnitSerial'
+                                : 'indoorModelNo'
+                              : isSerial
+                              ? 'outdoorUnitSerial'
+                              : 'outdoorModelNo';
+                          setUnregisteredRole(nextRole);
+                          setScannedResult({
+                            ...scannedResult,
+                            detectedAcType: nextType,
+                            badgeTitle: nextType === 'IDU' ? '🔵 Indoor Unit (IDU)' : '🟢 Outdoor Unit (ODU)',
+                            detectedRole: nextRole,
+                          });
+                        }}
+                        className="px-2 py-0.5 rounded-md bg-white dark:bg-slate-900 border border-slate-300 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-[10px] font-bold text-slate-700 dark:text-slate-300 transition-colors"
+                      >
+                        Swap ⇄ {scannedResult.detectedAcType === 'IDU' ? 'ODU' : 'IDU'}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
 
               {/* Order Update Feedback Toast */}
               {orderUpdateFeedback && (
@@ -1560,10 +1740,17 @@ export const InventoryQrScannerModal: React.FC<InventoryQrScannerModalProps> = (
 
                   {/* Mark as SR Number or Model Number Selector */}
                   <div className="p-3.5 bg-white dark:bg-slate-900 rounded-xl border border-amber-200 dark:border-amber-800/60 space-y-3">
-                    <div className="flex items-center justify-between">
-                      <span className="text-xs font-bold text-slate-800 dark:text-slate-200">
-                        Mark this Scanned Value "{scannedResult.raw}" as:
-                      </span>
+                    <div className="flex flex-wrap items-center justify-between gap-1.5">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-xs font-bold text-slate-800 dark:text-slate-200">
+                          Mark Scanned Value "{scannedResult.raw}" as:
+                        </span>
+                        {scannedResult.detectedAcType && (
+                          <span className="text-[10px] font-black px-2 py-0.2 rounded bg-blue-100 text-blue-800 dark:bg-blue-950 dark:text-blue-300">
+                            Auto: {scannedResult.detectedAcType}
+                          </span>
+                        )}
+                      </div>
                       <span className="text-[10px] uppercase font-black px-2 py-0.5 rounded-full bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300">
                         {unregisteredRole.replace(/([A-Z])/g, ' $1').toUpperCase()}
                       </span>
@@ -1573,25 +1760,31 @@ export const InventoryQrScannerModal: React.FC<InventoryQrScannerModalProps> = (
                       <button
                         type="button"
                         onClick={() => setUnregisteredRole('serialNo')}
-                        className={`py-2 px-2.5 rounded-xl text-xs font-bold border transition-all text-center ${
+                        className={`py-2 px-2.5 rounded-xl text-xs font-bold border transition-all text-center relative ${
                           unregisteredRole === 'serialNo'
                             ? 'bg-amber-500 text-white border-amber-600 shadow-xs'
                             : 'bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-100'
                         }`}
                       >
-                        Serial No (SR)
+                        <div>Serial No (SR)</div>
+                        {scannedResult.detectedRole === 'serialNo' && (
+                          <span className="text-[9px] opacity-80 block font-normal">Auto-Detected</span>
+                        )}
                       </button>
 
                       <button
                         type="button"
                         onClick={() => setUnregisteredRole('modelNo')}
-                        className={`py-2 px-2.5 rounded-xl text-xs font-bold border transition-all text-center ${
+                        className={`py-2 px-2.5 rounded-xl text-xs font-bold border transition-all text-center relative ${
                           unregisteredRole === 'modelNo'
                             ? 'bg-amber-500 text-white border-amber-600 shadow-xs'
                             : 'bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-100'
                         }`}
                       >
-                        Set Model No
+                        <div>Set Model No</div>
+                        {scannedResult.detectedRole === 'modelNo' && (
+                          <span className="text-[9px] opacity-80 block font-normal">Auto-Detected</span>
+                        )}
                       </button>
 
                       <button
@@ -1600,13 +1793,16 @@ export const InventoryQrScannerModal: React.FC<InventoryQrScannerModalProps> = (
                           setUnregisteredType('AC');
                           setUnregisteredRole('indoorModelNo');
                         }}
-                        className={`py-2 px-2.5 rounded-xl text-xs font-bold border transition-all text-center ${
+                        className={`py-2 px-2.5 rounded-xl text-xs font-bold border transition-all text-center relative ${
                           unregisteredRole === 'indoorModelNo'
-                            ? 'bg-blue-600 text-white border-blue-700 shadow-xs'
+                            ? 'bg-blue-600 text-white border-blue-700 shadow-xs ring-2 ring-blue-400/40'
                             : 'bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-100'
                         }`}
                       >
-                        Indoor Model (IDU)
+                        <div>Indoor Model (IDU)</div>
+                        {scannedResult.detectedRole === 'indoorModelNo' && (
+                          <span className="text-[9px] opacity-80 block font-normal text-blue-100">Auto-Detected</span>
+                        )}
                       </button>
 
                       <button
@@ -1615,13 +1811,16 @@ export const InventoryQrScannerModal: React.FC<InventoryQrScannerModalProps> = (
                           setUnregisteredType('AC');
                           setUnregisteredRole('outdoorModelNo');
                         }}
-                        className={`py-2 px-2.5 rounded-xl text-xs font-bold border transition-all text-center ${
+                        className={`py-2 px-2.5 rounded-xl text-xs font-bold border transition-all text-center relative ${
                           unregisteredRole === 'outdoorModelNo'
-                            ? 'bg-indigo-600 text-white border-indigo-700 shadow-xs'
+                            ? 'bg-indigo-600 text-white border-indigo-700 shadow-xs ring-2 ring-indigo-400/40'
                             : 'bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-100'
                         }`}
                       >
-                        Outdoor Model (ODU)
+                        <div>Outdoor Model (ODU)</div>
+                        {scannedResult.detectedRole === 'outdoorModelNo' && (
+                          <span className="text-[9px] opacity-80 block font-normal text-indigo-100">Auto-Detected</span>
+                        )}
                       </button>
 
                       <button
@@ -1630,13 +1829,16 @@ export const InventoryQrScannerModal: React.FC<InventoryQrScannerModalProps> = (
                           setUnregisteredType('AC');
                           setUnregisteredRole('indoorUnitSerial');
                         }}
-                        className={`py-2 px-2.5 rounded-xl text-xs font-bold border transition-all text-center ${
+                        className={`py-2 px-2.5 rounded-xl text-xs font-bold border transition-all text-center relative ${
                           unregisteredRole === 'indoorUnitSerial'
-                            ? 'bg-blue-600 text-white border-blue-700 shadow-xs'
+                            ? 'bg-blue-600 text-white border-blue-700 shadow-xs ring-2 ring-blue-400/40'
                             : 'bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-100'
                         }`}
                       >
-                        Indoor SN (IDU)
+                        <div>Indoor SN (IDU)</div>
+                        {scannedResult.detectedRole === 'indoorUnitSerial' && (
+                          <span className="text-[9px] opacity-80 block font-normal text-blue-100">Auto-Detected</span>
+                        )}
                       </button>
 
                       <button
@@ -1645,13 +1847,16 @@ export const InventoryQrScannerModal: React.FC<InventoryQrScannerModalProps> = (
                           setUnregisteredType('AC');
                           setUnregisteredRole('outdoorUnitSerial');
                         }}
-                        className={`py-2 px-2.5 rounded-xl text-xs font-bold border transition-all text-center ${
+                        className={`py-2 px-2.5 rounded-xl text-xs font-bold border transition-all text-center relative ${
                           unregisteredRole === 'outdoorUnitSerial'
-                            ? 'bg-indigo-600 text-white border-indigo-700 shadow-xs'
+                            ? 'bg-indigo-600 text-white border-indigo-700 shadow-xs ring-2 ring-indigo-400/40'
                             : 'bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-100'
                         }`}
                       >
-                        Outdoor SN (ODU)
+                        <div>Outdoor SN (ODU)</div>
+                        {scannedResult.detectedRole === 'outdoorUnitSerial' && (
+                          <span className="text-[9px] opacity-80 block font-normal text-indigo-100">Auto-Detected</span>
+                        )}
                       </button>
                     </div>
 

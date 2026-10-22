@@ -76,217 +76,480 @@ export function formatTallyDate(isoDateStr?: string): string {
   return '20260101';
 }
 
-/**
- * Parse Tally Prime XML file containing Ledgers, Stock Items, or Vouchers
- */
-export function parseTallyXmlData(xmlText: string): {
+export interface TallyParseStats {
+  fileSizeBytes: number;
+  fileType: 'XML_TALLY' | 'XML_EXCEL' | 'CSV' | 'TSV' | 'UNKNOWN';
+  totalFound: number;
+  customersFound: number;
+  stockItemsFound: number;
+  invoicesFound: number;
+  tagsDetected: string[];
+  hasXmlError: boolean;
+  xmlErrorMessage?: string;
+  detectedDelimiter?: string;
+}
+
+export interface TallyParseResult {
   customers: ParsedTallyCustomer[];
   stockItems: ParsedTallyStockItem[];
   invoices: ParsedTallyInvoice[];
-} {
-  const customers: ParsedTallyCustomer[] = [];
-  const stockItems: ParsedTallyStockItem[] = [];
-  const invoices: ParsedTallyInvoice[] = [];
-
-  try {
-    const parser = new DOMParser();
-    const xmlDoc = parser.parseFromString(xmlText, 'text/xml');
-
-    // Check for parse errors
-    const parseError = xmlDoc.getElementsByTagName('parsererror');
-    if (parseError.length > 0) {
-      console.warn('XML Parse Warning: document may contain minor syntax anomalies, attempting element fallback.');
-    }
-
-    // 1. Parse Ledgers (Customer Masters / Sundry Debtors)
-    const ledgerNodes = xmlDoc.getElementsByTagName('LEDGER');
-    for (let i = 0; i < ledgerNodes.length; i++) {
-      const node = ledgerNodes[i];
-      const nameAttr = node.getAttribute('NAME');
-      const nameEl = node.getElementsByTagName('NAME')[0]?.textContent?.trim();
-      const rawName = nameAttr || nameEl;
-      if (!rawName) continue;
-
-      const parentGroup = node.getElementsByTagName('PARENT')[0]?.textContent?.trim() || 'Sundry Debtors';
-      const phone =
-        node.getElementsByTagName('LEDGERMOBILE')[0]?.textContent?.trim() ||
-        node.getElementsByTagName('LEDGERPHONE')[0]?.textContent?.trim() ||
-        node.getElementsByTagName('PHONE')[0]?.textContent?.trim() ||
-        '';
-
-      const email = node.getElementsByTagName('EMAIL')[0]?.textContent?.trim() || '';
-      const gstin =
-        node.getElementsByTagName('PARTYGSTIN')[0]?.textContent?.trim() ||
-        node.getElementsByTagName('GSTIN')[0]?.textContent?.trim() ||
-        '';
-
-      // Address lines
-      const addrList = node.getElementsByTagName('ADDRESS');
-      const addrParts: string[] = [];
-      for (let j = 0; j < addrList.length; j++) {
-        const text = addrList[j].textContent?.trim();
-        if (text) addrParts.push(text);
-      }
-      const address = addrParts.join(', ');
-
-      const openingBalStr = node.getElementsByTagName('OPENINGBALANCE')[0]?.textContent?.trim() || '0';
-      const parsedBal = parseFloat(openingBalStr.replace(/[^0-9.-]/g, '')) || 0;
-
-      customers.push({
-        externalName: rawName,
-        phone: phone || '',
-        email: email || undefined,
-        billingAddress: address || 'Store Customer',
-        installationAddress: address || undefined,
-        gstin: gstin || undefined,
-        accountBalance: parsedBal,
-        tallyParent: parentGroup,
-        notes: `Imported from Tally Prime Ledger (${parentGroup})`,
-      });
-    }
-
-    // 2. Parse Stock Items
-    const stockNodes = xmlDoc.getElementsByTagName('STOCKITEM');
-    for (let i = 0; i < stockNodes.length; i++) {
-      const node = stockNodes[i];
-      const name =
-        node.getAttribute('NAME') ||
-        node.getElementsByTagName('NAME')[0]?.textContent?.trim() ||
-        '';
-      if (!name) continue;
-
-      const partNo = node.getElementsByTagName('PARTNO')[0]?.textContent?.trim() || '';
-      const category = node.getElementsByTagName('CATEGORY')[0]?.textContent?.trim() || '';
-      const parent = node.getElementsByTagName('PARENT')[0]?.textContent?.trim() || '';
-      const baseUnits = node.getElementsByTagName('BASEUNITS')[0]?.textContent?.trim() || 'Nos';
-      const hsnCode =
-        node.getElementsByTagName('GSTHSNCODE')[0]?.textContent?.trim() ||
-        node.getElementsByTagName('HSNCODE')[0]?.textContent?.trim() ||
-        '';
-
-      // Pricing
-      const rateStr =
-        node.getElementsByTagName('RATE')[0]?.textContent?.trim() ||
-        node.getElementsByTagName('OPENINGRATE')[0]?.textContent?.trim() ||
-        '';
-      const price = parseFloat(rateStr.replace(/[^0-9.-]/g, '')) || 45000;
-
-      // Detect type
-      const lower = `${name} ${parent} ${category}`.toLowerCase();
-      let type = 'AC';
-      let brand = 'Daikin';
-      if (lower.includes('tv') || lower.includes('television') || lower.includes('oled') || lower.includes('led')) {
-        type = 'TV';
-      } else if (lower.includes('fridge') || lower.includes('refrigerator')) {
-        type = 'Refrigerator';
-      } else if (lower.includes('washing') || lower.includes('wm')) {
-        type = 'Washing Machine';
-      }
-
-      if (lower.includes('voltas')) brand = 'Voltas';
-      else if (lower.includes('lg')) brand = 'LG';
-      else if (lower.includes('panasonic')) brand = 'Panasonic';
-      else if (lower.includes('mitsubishi')) brand = 'Mitsubishi';
-      else if (lower.includes('o general') || lower.includes('general')) brand = 'O General';
-      else if (lower.includes('samsung')) brand = 'Samsung';
-      else if (lower.includes('hitachi')) brand = 'Hitachi';
-      else if (lower.includes('lloyd')) brand = 'Lloyd';
-      else if (lower.includes('carrier')) brand = 'Carrier';
-
-      // Detect indoor/outdoor split model numbers if AC
-      const modelNo = partNo || name.split(' ')[0] || 'FTKF50TV';
-      const indoorModelNo = type === 'AC' ? `${modelNo}-IDU` : undefined;
-      const outdoorModelNo = type === 'AC' ? `${modelNo}-ODU` : undefined;
-
-      stockItems.push({
-        name,
-        modelNo,
-        indoorModelNo,
-        outdoorModelNo,
-        brand,
-        type,
-        sellingPrice: price,
-        hsnCode: hsnCode || undefined,
-        unit: baseUnits,
-      });
-    }
-
-    // 3. Parse Vouchers (Sales Invoices)
-    const voucherNodes = xmlDoc.getElementsByTagName('VOUCHER');
-    for (let i = 0; i < voucherNodes.length; i++) {
-      const node = voucherNodes[i];
-      const vchType = node.getAttribute('VCHTYPE') || node.getElementsByTagName('VOUCHERTYPENAME')[0]?.textContent?.trim() || '';
-      // Support Sales or all vouchers
-      const vchNumber = node.getElementsByTagName('VOUCHERNUMBER')[0]?.textContent?.trim() || `VCH-${i + 1}`;
-      const dateStr = node.getElementsByTagName('DATE')[0]?.textContent?.trim() || '';
-      const party =
-        node.getElementsByTagName('PARTYLEDGERNAME')[0]?.textContent?.trim() ||
-        node.getElementsByTagName('PARTYNAME')[0]?.textContent?.trim() ||
-        'Cash Customer';
-
-      const narration = node.getElementsByTagName('NARRATION')[0]?.textContent?.trim() || '';
-
-      // Inventory items inside voucher
-      const itemNodes = node.getElementsByTagName('ALLINVENTORYENTRIES.LIST');
-      const itemsList: Array<{ name: string; modelNo?: string; quantity: number; rate: number; amount: number }> = [];
-
-      for (let k = 0; k < itemNodes.length; k++) {
-        const itemNode = itemNodes[k];
-        const itemName = itemNode.getElementsByTagName('STOCKITEMNAME')[0]?.textContent?.trim();
-        if (!itemName) continue;
-
-        const qtyStr = itemNode.getElementsByTagName('ACTUALQTY')[0]?.textContent?.trim() ||
-          itemNode.getElementsByTagName('BILLEDQTY')[0]?.textContent?.trim() || '1';
-        const qty = Math.abs(parseFloat(qtyStr.replace(/[^0-9.-]/g, '')) || 1);
-
-        const rateStr = itemNode.getElementsByTagName('RATE')[0]?.textContent?.trim() || '0';
-        const rate = Math.abs(parseFloat(rateStr.replace(/[^0-9.-]/g, '')) || 0);
-
-        const amountStr = itemNode.getElementsByTagName('AMOUNT')[0]?.textContent?.trim() || '0';
-        const amount = Math.abs(parseFloat(amountStr.replace(/[^0-9.-]/g, '')) || rate * qty);
-
-        itemsList.push({
-          name: itemName,
-          quantity: qty,
-          rate: rate || (qty > 0 ? Math.round(amount / qty) : amount),
-          amount,
-        });
-      }
-
-      // Voucher total
-      const totalStr = node.getElementsByTagName('AMOUNT')[0]?.textContent?.trim() || '0';
-      const totalAmount = Math.abs(parseFloat(totalStr.replace(/[^0-9.-]/g, '')) || 0) ||
-        itemsList.reduce((sum, item) => sum + item.amount, 0);
-
-      invoices.push({
-        invoiceNumber: vchNumber,
-        date: dateStr,
-        customerName: party,
-        totalAmount,
-        narration,
-        items: itemsList.length > 0 ? itemsList : [
-          { name: 'Air Conditioner / Home Appliance', quantity: 1, rate: totalAmount, amount: totalAmount },
-        ],
-      });
-    }
-  } catch (err) {
-    console.error('Error parsing Tally XML:', err);
-  }
-
-  return { customers, stockItems, invoices };
+  stats: TallyParseStats;
+  rawSampleLines: string[];
+  warnings: string[];
 }
 
 /**
- * Parse CSV format (Tally Export to Excel / CSV)
+ * Helper to get elements by tag name case-insensitively from an XML document or element
  */
-export function parseTallyCsvData(csvText: string, category: 'CUSTOMERS' | 'INVENTORY' | 'INVOICES'): {
-  customers: ParsedTallyCustomer[];
-  stockItems: ParsedTallyStockItem[];
-  invoices: ParsedTallyInvoice[];
-} {
+function getElementsByTagNameCI(parent: Document | Element, tagName: string): Element[] {
+  const target = tagName.toUpperCase();
+  const results: Element[] = [];
+  const allElements = parent.getElementsByTagName('*');
+  for (let i = 0; i < allElements.length; i++) {
+    const el = allElements[i];
+    // Strip namespace prefix if any (e.g. UDF:LEDGER -> LEDGER)
+    const localName = (el.localName || el.tagName || '').toUpperCase();
+    if (localName === target || el.tagName.toUpperCase() === target) {
+      results.push(el);
+    }
+  }
+  return results;
+}
+
+/**
+ * Helper to get direct or first child element text content case-insensitively
+ */
+function getChildTextCI(parent: Element, tagName: string): string {
+  const elements = getElementsByTagNameCI(parent, tagName);
+  if (elements.length > 0 && elements[0].textContent) {
+    return elements[0].textContent.trim();
+  }
+  return '';
+}
+
+/**
+ * Parse Tally Prime XML file containing Ledgers, Stock Items, or Vouchers
+ * Features:
+ * - Unescaped ampersand auto-repair
+ * - Case-insensitive tag matching
+ * - Excel SpreadsheetML XML (<Workbook>) support
+ * - Regex fallback if DOMParser fails or produces 0 results
+ * - Comprehensive diagnostic statistics
+ */
+export function parseTallyXmlData(rawXmlText: string): TallyParseResult {
   const customers: ParsedTallyCustomer[] = [];
   const stockItems: ParsedTallyStockItem[] = [];
   const invoices: ParsedTallyInvoice[] = [];
+  const warnings: string[] = [];
+  const tagsDetected: string[] = [];
+
+  const rawSampleLines = rawXmlText
+    .split(/\r?\n/)
+    .slice(0, 30)
+    .filter((l) => l.trim().length > 0);
+
+  const fileSizeBytes = new Blob([rawXmlText]).size;
+
+  let fileType: 'XML_TALLY' | 'XML_EXCEL' | 'UNKNOWN' = 'XML_TALLY';
+  let hasXmlError = false;
+  let xmlErrorMessage: string | undefined;
+
+  // Pre-clean: strip UTF-8 BOM and fix unescaped ampersands commonly found in Indian firm names
+  let sanitizedXml = (rawXmlText || '')
+    .replace(/^\uFEFF/, '')
+    .replace(/&(?!(amp|lt|gt|quot|apos|#\d+|#x[0-9a-fA-F]+);)/g, '&amp;');
+
+  // Check if this is an Excel Spreadsheet XML export from Tally/Excel (<Workbook ...>)
+  if (/<Workbook[\s>]/i.test(sanitizedXml) || /schemas-microsoft-com:office:spreadsheet/i.test(sanitizedXml)) {
+    fileType = 'XML_EXCEL';
+    try {
+      const parser = new DOMParser();
+      const doc = parser.parseFromString(sanitizedXml, 'text/xml');
+      const rows = doc.getElementsByTagName('Row');
+
+      if (rows.length > 1) {
+        // First row as headers
+        const headerCells = rows[0].getElementsByTagName('Cell');
+        const headers: string[] = [];
+        for (let h = 0; h < headerCells.length; h++) {
+          const dataEl = headerCells[h].getElementsByTagName('Data')[0];
+          headers.push((dataEl?.textContent || '').trim().toLowerCase().replace(/[^a-z0-9]/g, ''));
+        }
+
+        for (let r = 1; r < rows.length; r++) {
+          const cells = rows[r].getElementsByTagName('Cell');
+          const rowVals: string[] = [];
+          for (let c = 0; c < cells.length; c++) {
+            const dataEl = cells[c].getElementsByTagName('Data')[0];
+            rowVals.push((dataEl?.textContent || '').trim());
+          }
+          if (rowVals.length === 0 || !rowVals[0]) continue;
+
+          const rowMap: Record<string, string> = {};
+          headers.forEach((h, idx) => {
+            rowMap[h] = rowVals[idx] || '';
+          });
+
+          // Check if row is Ledger, Stock, or Voucher based on headers
+          const isLedger = headers.some((h) => h.includes('ledger') || h.includes('party') || h.includes('debtor') || h.includes('customer'));
+          const isStock = headers.some((h) => h.includes('stock') || h.includes('item') || h.includes('model') || h.includes('rate'));
+          const isVoucher = headers.some((h) => h.includes('voucher') || h.includes('invoice') || h.includes('billno'));
+
+          if (isStock) {
+            const name = rowMap['itemname'] || rowMap['stockitem'] || rowMap['name'] || rowVals[0];
+            const model = rowMap['model'] || rowMap['modelno'] || rowMap['partno'] || rowVals[1] || 'FTKF50TV';
+            const price = parseFloat((rowMap['rate'] || rowMap['price'] || rowVals[2] || '45000').replace(/[^0-9.-]/g, '')) || 45000;
+            stockItems.push({
+              name,
+              modelNo: model,
+              indoorModelNo: `${model}-IDU`,
+              outdoorModelNo: `${model}-ODU`,
+              brand: rowMap['brand'] || 'Daikin',
+              type: rowMap['type'] || 'AC',
+              sellingPrice: price,
+            });
+          } else if (isVoucher) {
+            const invNo = rowMap['voucherno'] || rowMap['invoiceno'] || rowVals[0];
+            const party = rowMap['partyname'] || rowMap['customer'] || rowVals[1] || 'Cash';
+            const total = parseFloat((rowMap['total'] || rowMap['amount'] || rowVals[2] || '0').replace(/[^0-9.-]/g, '')) || 0;
+            invoices.push({
+              invoiceNumber: invNo,
+              customerName: party,
+              date: rowMap['date'] || '',
+              totalAmount: total,
+              items: [{ name: 'Equipment Sales', quantity: 1, rate: total, amount: total }],
+            });
+          } else {
+            // Default to customer
+            const name = rowMap['name'] || rowMap['customername'] || rowMap['ledgername'] || rowMap['partyname'] || rowVals[0];
+            const phone = rowMap['phone'] || rowMap['mobile'] || rowMap['contact'] || rowVals[1] || '';
+            const address = rowMap['address'] || rowMap['location'] || rowVals[2] || 'Store Customer';
+            const gstin = rowMap['gstin'] || rowMap['gst'] || '';
+            const bal = parseFloat((rowMap['balance'] || rowMap['openingbalance'] || '0').replace(/[^0-9.-]/g, '')) || 0;
+            customers.push({
+              externalName: name,
+              phone,
+              billingAddress: address,
+              gstin: gstin || undefined,
+              accountBalance: bal,
+              notes: 'Imported from Tally Excel Spreadsheet XML',
+            });
+          }
+        }
+      }
+    } catch (e: any) {
+      warnings.push(`Excel XML Spreadsheet parser error: ${e.message}`);
+    }
+  }
+
+  // If not Excel XML or if Excel XML yielded 0 records, run standard Tally XML parser
+  if (customers.length === 0 && stockItems.length === 0 && invoices.length === 0) {
+    try {
+      const parser = new DOMParser();
+      const xmlDoc = parser.parseFromString(sanitizedXml, 'text/xml');
+
+      // Check for parse errors
+      const parseErrors = xmlDoc.getElementsByTagName('parsererror');
+      if (parseErrors.length > 0) {
+        hasXmlError = true;
+        xmlErrorMessage = parseErrors[0].textContent?.slice(0, 180) || 'XML syntax warning detected.';
+        warnings.push(`XML Parser Notice: ${xmlErrorMessage}`);
+      }
+
+      // Collect sample tag names to assist diagnosis
+      const sampleNodes = xmlDoc.getElementsByTagName('*');
+      const foundTagSet = new Set<string>();
+      for (let i = 0; i < Math.min(sampleNodes.length, 60); i++) {
+        const t = (sampleNodes[i].localName || sampleNodes[i].tagName).toUpperCase();
+        if (t && !t.includes(':') && t.length < 25) foundTagSet.add(t);
+      }
+      tagsDetected.push(...Array.from(foundTagSet));
+
+      // 1. Parse Ledgers (Customer Masters / Sundry Debtors)
+      const ledgerNodes = getElementsByTagNameCI(xmlDoc, 'LEDGER');
+      for (let i = 0; i < ledgerNodes.length; i++) {
+        const node = ledgerNodes[i];
+        const nameAttr = node.getAttribute('NAME') || node.getAttribute('name');
+        const nameEl = getChildTextCI(node, 'NAME');
+        const rawName = nameAttr || nameEl;
+        if (!rawName) continue;
+
+        const parentGroup = getChildTextCI(node, 'PARENT') || 'Sundry Debtors';
+        const phone =
+          getChildTextCI(node, 'LEDGERMOBILE') ||
+          getChildTextCI(node, 'LEDGERPHONE') ||
+          getChildTextCI(node, 'PHONE') ||
+          getChildTextCI(node, 'MOBILE') ||
+          '';
+
+        const email = getChildTextCI(node, 'EMAIL');
+        const gstin = getChildTextCI(node, 'PARTYGSTIN') || getChildTextCI(node, 'GSTIN');
+
+        // Address lines
+        const addrList = getElementsByTagNameCI(node, 'ADDRESS');
+        const addrParts: string[] = [];
+        for (let j = 0; j < addrList.length; j++) {
+          const text = addrList[j].textContent?.trim();
+          if (text) addrParts.push(text);
+        }
+        const address = addrParts.join(', ');
+
+        const openingBalStr = getChildTextCI(node, 'OPENINGBALANCE') || '0';
+        const parsedBal = parseFloat(openingBalStr.replace(/[^0-9.-]/g, '')) || 0;
+
+        customers.push({
+          externalName: rawName,
+          phone: phone || '',
+          email: email || undefined,
+          billingAddress: address || 'Store Customer',
+          installationAddress: address || undefined,
+          gstin: gstin || undefined,
+          accountBalance: parsedBal,
+          tallyParent: parentGroup,
+          notes: `Imported from Tally Prime Ledger (${parentGroup})`,
+        });
+      }
+
+      // 2. Parse Stock Items
+      const stockNodes = getElementsByTagNameCI(xmlDoc, 'STOCKITEM');
+      for (let i = 0; i < stockNodes.length; i++) {
+        const node = stockNodes[i];
+        const name =
+          node.getAttribute('NAME') ||
+          node.getAttribute('name') ||
+          getChildTextCI(node, 'NAME');
+        if (!name) continue;
+
+        const partNo = getChildTextCI(node, 'PARTNO');
+        const category = getChildTextCI(node, 'CATEGORY');
+        const parent = getChildTextCI(node, 'PARENT');
+        const baseUnits = getChildTextCI(node, 'BASEUNITS') || 'Nos';
+        const hsnCode = getChildTextCI(node, 'GSTHSNCODE') || getChildTextCI(node, 'HSNCODE');
+
+        // Pricing
+        const rateStr = getChildTextCI(node, 'RATE') || getChildTextCI(node, 'OPENINGRATE');
+        const price = parseFloat(rateStr.replace(/[^0-9.-]/g, '')) || 45000;
+
+        // Detect type & brand
+        const lower = `${name} ${parent} ${category}`.toLowerCase();
+        let type = 'AC';
+        let brand = 'Daikin';
+        if (lower.includes('tv') || lower.includes('television') || lower.includes('oled') || lower.includes('led')) {
+          type = 'TV';
+        } else if (lower.includes('fridge') || lower.includes('refrigerator')) {
+          type = 'Refrigerator';
+        } else if (lower.includes('washing') || lower.includes('wm')) {
+          type = 'Washing Machine';
+        }
+
+        if (lower.includes('voltas')) brand = 'Voltas';
+        else if (lower.includes('lg')) brand = 'LG';
+        else if (lower.includes('panasonic')) brand = 'Panasonic';
+        else if (lower.includes('mitsubishi')) brand = 'Mitsubishi';
+        else if (lower.includes('o general') || lower.includes('general')) brand = 'O General';
+        else if (lower.includes('samsung')) brand = 'Samsung';
+        else if (lower.includes('hitachi')) brand = 'Hitachi';
+        else if (lower.includes('lloyd')) brand = 'Lloyd';
+        else if (lower.includes('carrier')) brand = 'Carrier';
+
+        const modelNo = partNo || name.split(' ')[0] || 'FTKF50TV';
+        const indoorModelNo = type === 'AC' ? `${modelNo}-IDU` : undefined;
+        const outdoorModelNo = type === 'AC' ? `${modelNo}-ODU` : undefined;
+
+        stockItems.push({
+          name,
+          modelNo,
+          indoorModelNo,
+          outdoorModelNo,
+          brand,
+          type,
+          sellingPrice: price,
+          hsnCode: hsnCode || undefined,
+          unit: baseUnits,
+        });
+      }
+
+      // 3. Parse Vouchers (Sales Invoices)
+      const voucherNodes = getElementsByTagNameCI(xmlDoc, 'VOUCHER');
+      for (let i = 0; i < voucherNodes.length; i++) {
+        const node = voucherNodes[i];
+        const vchNumber = getChildTextCI(node, 'VOUCHERNUMBER') || `VCH-${i + 1}`;
+        const dateStr = getChildTextCI(node, 'DATE');
+        const party = getChildTextCI(node, 'PARTYLEDGERNAME') || getChildTextCI(node, 'PARTYNAME') || 'Cash Customer';
+        const narration = getChildTextCI(node, 'NARRATION');
+
+        // Inventory items inside voucher
+        const itemNodes = getElementsByTagNameCI(node, 'ALLINVENTORYENTRIES.LIST');
+        const itemsList: Array<{ name: string; modelNo?: string; quantity: number; rate: number; amount: number }> = [];
+
+        for (let k = 0; k < itemNodes.length; k++) {
+          const itemNode = itemNodes[k];
+          const itemName = getChildTextCI(itemNode, 'STOCKITEMNAME');
+          if (!itemName) continue;
+
+          const qtyStr = getChildTextCI(itemNode, 'ACTUALQTY') || getChildTextCI(itemNode, 'BILLEDQTY') || '1';
+          const qty = Math.abs(parseFloat(qtyStr.replace(/[^0-9.-]/g, '')) || 1);
+
+          const rateStr = getChildTextCI(itemNode, 'RATE') || '0';
+          const rate = Math.abs(parseFloat(rateStr.replace(/[^0-9.-]/g, '')) || 0);
+
+          const amountStr = getChildTextCI(itemNode, 'AMOUNT') || '0';
+          const amount = Math.abs(parseFloat(amountStr.replace(/[^0-9.-]/g, '')) || rate * qty);
+
+          itemsList.push({
+            name: itemName,
+            quantity: qty,
+            rate: rate || (qty > 0 ? Math.round(amount / qty) : amount),
+            amount,
+          });
+        }
+
+        const totalStr = getChildTextCI(node, 'AMOUNT') || '0';
+        const totalAmount = Math.abs(parseFloat(totalStr.replace(/[^0-9.-]/g, '')) || 0) ||
+          itemsList.reduce((sum, item) => sum + item.amount, 0);
+
+        invoices.push({
+          invoiceNumber: vchNumber,
+          date: dateStr,
+          customerName: party,
+          totalAmount,
+          narration,
+          items: itemsList.length > 0 ? itemsList : [
+            { name: 'Air Conditioner / Home Appliance', quantity: 1, rate: totalAmount, amount: totalAmount },
+          ],
+        });
+      }
+    } catch (err: any) {
+      warnings.push(`DOMParser encountered an exception: ${err.message}`);
+    }
+  }
+
+  // -------------------------------------------------------------
+  // REGEX FALLBACK: If DOMParser yielded 0 items, salvage records
+  // via direct regex tag matching (handles broken XML or namespaces)
+  // -------------------------------------------------------------
+  if (customers.length === 0 && stockItems.length === 0 && invoices.length === 0) {
+    warnings.push('Standard DOM extraction returned 0 items; attempting resilient regex extractor.');
+
+    // 1. Regex Ledger Matcher
+    const ledgerRegex = /<(?:[A-Z0-9]+:)?LEDGER\b([^>]*)>([\s\S]*?)<\/(?:[A-Z0-9]+:)?LEDGER>/gi;
+    let match: RegExpExecArray | null;
+    while ((match = ledgerRegex.exec(sanitizedXml)) !== null) {
+      const attrs = match[1] || '';
+      const body = match[2] || '';
+      const nameAttrMatch = attrs.match(/NAME\s*=\s*["']([^"']+)["']/i);
+      const nameTagMatch = body.match(/<NAME>([\s\S]*?)<\/NAME>/i);
+      const rawName = (nameAttrMatch ? nameAttrMatch[1] : nameTagMatch ? nameTagMatch[1] : '').trim();
+      if (!rawName) continue;
+
+      const phoneMatch = body.match(/<(?:LEDGERMOBILE|LEDGERPHONE|PHONE|MOBILE)>([\s\S]*?)<\//i);
+      const emailMatch = body.match(/<EMAIL>([\s\S]*?)<\/EMAIL>/i);
+      const gstinMatch = body.match(/<(?:PARTYGSTIN|GSTIN)>([\s\S]*?)<\//i);
+      const parentMatch = body.match(/<PARENT>([\s\S]*?)<\/PARENT>/i);
+      const balMatch = body.match(/<OPENINGBALANCE>([\s\S]*?)<\/OPENINGBALANCE>/i);
+
+      customers.push({
+        externalName: rawName,
+        phone: phoneMatch ? phoneMatch[1].trim() : '',
+        email: emailMatch ? emailMatch[1].trim() : undefined,
+        billingAddress: 'Store Customer',
+        gstin: gstinMatch ? gstinMatch[1].trim() : undefined,
+        accountBalance: balMatch ? parseFloat(balMatch[1].replace(/[^0-9.-]/g, '')) || 0 : 0,
+        tallyParent: parentMatch ? parentMatch[1].trim() : 'Sundry Debtors',
+        notes: 'Imported via resilient Tally XML pattern matcher',
+      });
+    }
+
+    // 2. Regex Stock Item Matcher
+    const stockRegex = /<(?:[A-Z0-9]+:)?STOCKITEM\b([^>]*)>([\s\S]*?)<\/(?:[A-Z0-9]+:)?STOCKITEM>/gi;
+    while ((match = stockRegex.exec(sanitizedXml)) !== null) {
+      const attrs = match[1] || '';
+      const body = match[2] || '';
+      const nameAttrMatch = attrs.match(/NAME\s*=\s*["']([^"']+)["']/i);
+      const nameTagMatch = body.match(/<NAME>([\s\S]*?)<\/NAME>/i);
+      const rawName = (nameAttrMatch ? nameAttrMatch[1] : nameTagMatch ? nameTagMatch[1] : '').trim();
+      if (!rawName) continue;
+
+      const partMatch = body.match(/<PARTNO>([\s\S]*?)<\/PARTNO>/i);
+      const rateMatch = body.match(/<(?:RATE|OPENINGRATE)>([\s\S]*?)<\//i);
+      const catMatch = body.match(/<CATEGORY>([\s\S]*?)<\/CATEGORY>/i);
+
+      const modelNo = partMatch ? partMatch[1].trim() : rawName.split(' ')[0] || 'FTKF50TV';
+      const price = rateMatch ? parseFloat(rateMatch[1].replace(/[^0-9.-]/g, '')) || 45000 : 45000;
+
+      stockItems.push({
+        name: rawName,
+        modelNo,
+        indoorModelNo: `${modelNo}-IDU`,
+        outdoorModelNo: `${modelNo}-ODU`,
+        brand: catMatch ? catMatch[1].trim() : 'Daikin',
+        type: 'AC',
+        sellingPrice: price,
+      });
+    }
+
+    // 3. Regex Voucher Matcher
+    const voucherRegex = /<(?:[A-Z0-9]+:)?VOUCHER\b([^>]*)>([\s\S]*?)<\/(?:[A-Z0-9]+:)?VOUCHER>/gi;
+    let vchIndex = 1;
+    while ((match = voucherRegex.exec(sanitizedXml)) !== null) {
+      const body = match[2] || '';
+      const vchNoMatch = body.match(/<VOUCHERNUMBER>([\s\S]*?)<\/VOUCHERNUMBER>/i);
+      const partyMatch = body.match(/<(?:PARTYLEDGERNAME|PARTYNAME)>([\s\S]*?)<\//i);
+      const dateMatch = body.match(/<DATE>([\s\S]*?)<\/DATE>/i);
+      const amountMatch = body.match(/<AMOUNT>([\s\S]*?)<\/AMOUNT>/i);
+
+      const total = amountMatch ? Math.abs(parseFloat(amountMatch[1].replace(/[^0-9.-]/g, '')) || 0) : 0;
+      invoices.push({
+        invoiceNumber: vchNoMatch ? vchNoMatch[1].trim() : `VCH-${vchIndex++}`,
+        customerName: partyMatch ? partyMatch[1].trim() : 'Cash Customer',
+        date: dateMatch ? dateMatch[1].trim() : '',
+        totalAmount: total,
+        items: [{ name: 'Equipment Sales', quantity: 1, rate: total, amount: total }],
+      });
+    }
+  }
+
+  const totalFound = customers.length + stockItems.length + invoices.length;
+
+  return {
+    customers,
+    stockItems,
+    invoices,
+    stats: {
+      fileSizeBytes,
+      fileType,
+      totalFound,
+      customersFound: customers.length,
+      stockItemsFound: stockItems.length,
+      invoicesFound: invoices.length,
+      tagsDetected,
+      hasXmlError,
+      xmlErrorMessage,
+    },
+    rawSampleLines,
+    warnings,
+  };
+}
+
+/**
+ * Parse CSV / TSV format with delimiter auto-detection and generous header mapping
+ */
+export function parseTallyCsvData(
+  csvText: string,
+  category: 'CUSTOMERS' | 'INVENTORY' | 'INVOICES',
+  forcedDelimiter?: string
+): TallyParseResult {
+  const customers: ParsedTallyCustomer[] = [];
+  const stockItems: ParsedTallyStockItem[] = [];
+  const invoices: ParsedTallyInvoice[] = [];
+  const warnings: string[] = [];
+
+  const rawSampleLines = csvText
+    .split(/\r?\n/)
+    .slice(0, 30)
+    .filter((l) => l.trim().length > 0);
+
+  const fileSizeBytes = new Blob([csvText]).size;
 
   const lines = csvText
     .split(/\r?\n/)
@@ -294,28 +557,82 @@ export function parseTallyCsvData(csvText: string, category: 'CUSTOMERS' | 'INVE
     .filter((l) => l.length > 0);
 
   if (lines.length < 2) {
-    return { customers, stockItems, invoices };
+    return {
+      customers,
+      stockItems,
+      invoices,
+      stats: {
+        fileSizeBytes,
+        fileType: 'CSV',
+        totalFound: 0,
+        customersFound: 0,
+        stockItemsFound: 0,
+        invoicesFound: 0,
+        tagsDetected: [],
+        hasXmlError: false,
+      },
+      rawSampleLines,
+      warnings: ['File has fewer than 2 non-empty lines.'],
+    };
   }
 
-  // Parse header
-  const header = lines[0].split(',').map((h) => h.replace(/["']/g, '').trim().toLowerCase());
+  // Auto-detect delimiter if not forced: compare counts of Tab, Semicolon, Comma, Pipe in header row
+  let delimiter = forcedDelimiter;
+  if (!delimiter) {
+    const firstLine = lines[0];
+    const tabCount = (firstLine.match(/\t/g) || []).length;
+    const semicolonCount = (firstLine.match(/;/g) || []).length;
+    const pipeCount = (firstLine.match(/\|/g) || []).length;
+    const commaCount = (firstLine.match(/,/g) || []).length;
+
+    if (tabCount > commaCount && tabCount >= semicolonCount) {
+      delimiter = '\t';
+    } else if (semicolonCount > commaCount && semicolonCount >= tabCount) {
+      delimiter = ';';
+    } else if (pipeCount > commaCount) {
+      delimiter = '|';
+    } else {
+      delimiter = ',';
+    }
+  }
+
+  const isTsv = delimiter === '\t';
+  const fileType = isTsv ? 'TSV' : 'CSV';
+
+  // Parse header and normalize keys (lowercase, alphanumeric only)
+  const headerRaw = lines[0].split(delimiter).map((h) => h.replace(/["']/g, '').trim());
+  const headerNormalized = headerRaw.map((h) => h.toLowerCase().replace(/[^a-z0-9]/g, ''));
+
+  // Regex splitter respecting quotes for standard delimiters
+  const splitRow = (rowLine: string): string[] => {
+    if (delimiter === '\t') {
+      return rowLine.split('\t').map((c) => c.replace(/^"|"$/g, '').trim());
+    }
+    if (delimiter === ';') {
+      return rowLine.split(/;(?=(?:(?:[^"]*"){2})*[^"]*$)/).map((c) => c.replace(/^"|"$/g, '').trim());
+    }
+    if (delimiter === '|') {
+      return rowLine.split('|').map((c) => c.replace(/^"|"$/g, '').trim());
+    }
+    return rowLine.split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/).map((c) => c.replace(/^"|"$/g, '').trim());
+  };
 
   for (let i = 1; i < lines.length; i++) {
-    // Regex split respecting quotes
-    const row = lines[i].split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/).map((v) => v.replace(/^"|"$/g, '').trim());
+    const row = splitRow(lines[i]);
     if (row.length === 0 || !row[0]) continue;
 
     const rowObj: Record<string, string> = {};
-    header.forEach((col, idx) => {
+    headerNormalized.forEach((col, idx) => {
       rowObj[col] = row[idx] || '';
     });
 
     if (category === 'CUSTOMERS') {
       const name =
         rowObj['name'] ||
-        rowObj['customer name'] ||
-        rowObj['ledger name'] ||
-        rowObj['party name'] ||
+        rowObj['customername'] ||
+        rowObj['ledgername'] ||
+        rowObj['partyname'] ||
+        rowObj['particulars'] ||
         row[0];
       if (!name) continue;
 
@@ -323,19 +640,20 @@ export function parseTallyCsvData(csvText: string, category: 'CUSTOMERS' | 'INVE
         rowObj['phone'] ||
         rowObj['mobile'] ||
         rowObj['contact'] ||
+        rowObj['mobileno'] ||
         rowObj['telephone'] ||
         row[1] ||
         '';
 
       const address =
         rowObj['address'] ||
-        rowObj['billing address'] ||
+        rowObj['billingaddress'] ||
         rowObj['location'] ||
         row[2] ||
         'Store Customer';
 
-      const gstin = rowObj['gstin'] || rowObj['gst'] || rowObj['gst no'] || '';
-      const balStr = rowObj['balance'] || rowObj['opening balance'] || '0';
+      const gstin = rowObj['gstin'] || rowObj['gst'] || rowObj['gstno'] || '';
+      const balStr = rowObj['balance'] || rowObj['openingbalance'] || rowObj['closingbalance'] || '0';
       const bal = parseFloat(balStr.replace(/[^0-9.-]/g, '')) || 0;
 
       customers.push({
@@ -344,27 +662,30 @@ export function parseTallyCsvData(csvText: string, category: 'CUSTOMERS' | 'INVE
         billingAddress: address,
         gstin: gstin || undefined,
         accountBalance: bal,
-        notes: 'Imported from Tally CSV / Excel export',
+        notes: `Imported from Tally ${fileType} export`,
       });
     } else if (category === 'INVENTORY') {
       const name =
-        rowObj['item name'] ||
-        rowObj['stock item'] ||
-        rowObj['product name'] ||
+        rowObj['itemname'] ||
+        rowObj['stockitem'] ||
+        rowObj['stockitemname'] ||
+        rowObj['productname'] ||
+        rowObj['description'] ||
         rowObj['name'] ||
         row[0];
       if (!name) continue;
 
       const modelNo =
         rowObj['model'] ||
-        rowObj['model no'] ||
-        rowObj['part no'] ||
+        rowObj['modelno'] ||
+        rowObj['partno'] ||
+        rowObj['itemcode'] ||
         row[1] ||
         'FTKF50TV';
 
-      const brand = rowObj['brand'] || rowObj['make'] || 'Daikin';
+      const brand = rowObj['brand'] || rowObj['make'] || rowObj['manufacturer'] || 'Daikin';
       const type = rowObj['type'] || rowObj['category'] || 'AC';
-      const priceStr = rowObj['rate'] || rowObj['price'] || rowObj['selling price'] || row[2] || '45000';
+      const priceStr = rowObj['rate'] || rowObj['price'] || rowObj['sellingprice'] || rowObj['mrp'] || row[2] || '45000';
       const price = parseFloat(priceStr.replace(/[^0-9.-]/g, '')) || 45000;
 
       const indoorModelNo = type.toUpperCase() === 'AC' ? `${modelNo}-IDU` : undefined;
@@ -378,13 +699,13 @@ export function parseTallyCsvData(csvText: string, category: 'CUSTOMERS' | 'INVE
         brand,
         type,
         sellingPrice: price,
-        hsnCode: rowObj['hsn'] || rowObj['hsn code'] || undefined,
+        hsnCode: rowObj['hsn'] || rowObj['hsncode'] || rowObj['hsnsac'] || undefined,
       });
     } else if (category === 'INVOICES') {
-      const invNo = rowObj['invoice no'] || rowObj['voucher no'] || rowObj['bill no'] || row[0] || `INV-${i}`;
-      const customer = rowObj['customer'] || rowObj['party name'] || rowObj['buyer'] || row[1] || 'Retail Customer';
-      const date = rowObj['date'] || rowObj['invoice date'] || '';
-      const totalStr = rowObj['total'] || rowObj['amount'] || rowObj['net amount'] || row[2] || '0';
+      const invNo = rowObj['invoiceno'] || rowObj['voucherno'] || rowObj['billno'] || row[0] || `INV-${i}`;
+      const customer = rowObj['customer'] || rowObj['customername'] || rowObj['partyname'] || rowObj['buyer'] || row[1] || 'Retail Customer';
+      const date = rowObj['date'] || rowObj['invoicedate'] || rowObj['voucherdate'] || '';
+      const totalStr = rowObj['total'] || rowObj['amount'] || rowObj['netamount'] || rowObj['grandtotal'] || row[2] || '0';
       const total = parseFloat(totalStr.replace(/[^0-9.-]/g, '')) || 0;
 
       invoices.push({
@@ -397,7 +718,26 @@ export function parseTallyCsvData(csvText: string, category: 'CUSTOMERS' | 'INVE
     }
   }
 
-  return { customers, stockItems, invoices };
+  const totalFound = customers.length + stockItems.length + invoices.length;
+
+  return {
+    customers,
+    stockItems,
+    invoices,
+    stats: {
+      fileSizeBytes,
+      fileType,
+      totalFound,
+      customersFound: customers.length,
+      stockItemsFound: stockItems.length,
+      invoicesFound: invoices.length,
+      tagsDetected: headerNormalized.slice(0, 10),
+      hasXmlError: false,
+      detectedDelimiter: delimiter,
+    },
+    rawSampleLines,
+    warnings,
+  };
 }
 
 /**

@@ -31,6 +31,9 @@ import {
   ShieldCheck,
   HardDrive,
   Share2,
+  Eye,
+  EyeOff,
+  Terminal,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import {
@@ -51,6 +54,7 @@ import {
   ParsedTallyCustomer,
   ParsedTallyStockItem,
   ParsedTallyInvoice,
+  TallyParseStats,
 } from '../../utils/tallyHelper';
 
 export type TallyCategory =
@@ -119,6 +123,12 @@ export const TallyPrimeManager: React.FC<TallyPrimeManagerProps> = ({
   const [dragOver, setDragOver] = useState(false);
   const [uploadedFileName, setUploadedFileName] = useState<string | null>(null);
   const [fileContentRaw, setFileContentRaw] = useState<string>('');
+  const [isReadingFile, setIsReadingFile] = useState(false);
+  const [parseStats, setParseStats] = useState<TallyParseStats | null>(null);
+  const [showRawInspector, setShowRawInspector] = useState(false);
+  const [parseWarnings, setParseWarnings] = useState<string[]>([]);
+  const [rawSampleLines, setRawSampleLines] = useState<string[]>([]);
+  const [forcedDelimiter, setForcedDelimiter] = useState<string>('auto');
   const [parsedCustomers, setParsedCustomers] = useState<ParsedTallyCustomer[]>([]);
   const [parsedStock, setParsedStock] = useState<ParsedTallyStockItem[]>([]);
   const [parsedInvoices, setParsedInvoices] = useState<ParsedTallyInvoice[]>([]);
@@ -140,8 +150,8 @@ export const TallyPrimeManager: React.FC<TallyPrimeManagerProps> = ({
   // ==========================================
   const [activeGuideCategory, setActiveGuideCategory] = useState<GuideCategory>('CUSTOMERS');
 
-  // Process uploaded file (XML or CSV)
-  const processRawFileText = (text: string, filename: string) => {
+  // Process uploaded file (XML or CSV/TSV)
+  const processRawFileText = (text: string, filename: string, delimiterOverride?: string) => {
     setUploadedFileName(filename);
     setFileContentRaw(text);
     setImportErrorMessage(null);
@@ -154,6 +164,9 @@ export const TallyPrimeManager: React.FC<TallyPrimeManagerProps> = ({
       setParsedCustomers(parsed.customers);
       setParsedStock(parsed.stockItems);
       setParsedInvoices(parsed.invoices);
+      setParseStats(parsed.stats);
+      setParseWarnings(parsed.warnings);
+      setRawSampleLines(parsed.rawSampleLines);
 
       // Auto-switch category based on which items were found
       if (parsed.customers.length > 0 && selectedCategory !== 'CUSTOMERS') {
@@ -174,16 +187,26 @@ export const TallyPrimeManager: React.FC<TallyPrimeManagerProps> = ({
             : parsed.invoices.length;
         setSelectedItemIndices(Array.from({ length: count }, (_, i) => i));
       }
+
+      if (parsed.stats.totalFound === 0) {
+        setImportErrorMessage(
+          `File loaded (${(parsed.stats.fileSizeBytes / 1024).toFixed(1)} KB), but 0 Tally records were detected. See diagnostic details below.`
+        );
+      }
     } else {
-      // CSV format
+      // CSV / TSV format
+      const effDelim = delimiterOverride && delimiterOverride !== 'auto' ? delimiterOverride : undefined;
       const csvCategory =
         selectedCategory === 'INVENTORY' || selectedCategory === 'INVOICES'
           ? selectedCategory
           : 'CUSTOMERS';
-      const parsed = parseTallyCsvData(text, csvCategory);
+      const parsed = parseTallyCsvData(text, csvCategory, effDelim);
       setParsedCustomers(parsed.customers);
       setParsedStock(parsed.stockItems);
       setParsedInvoices(parsed.invoices);
+      setParseStats(parsed.stats);
+      setParseWarnings(parsed.warnings);
+      setRawSampleLines(parsed.rawSampleLines);
 
       const count =
         selectedCategory === 'CUSTOMERS'
@@ -192,6 +215,12 @@ export const TallyPrimeManager: React.FC<TallyPrimeManagerProps> = ({
           ? parsed.stockItems.length
           : parsed.invoices.length;
       setSelectedItemIndices(Array.from({ length: count }, (_, i) => i));
+
+      if (parsed.stats.totalFound === 0) {
+        setImportErrorMessage(
+          `File loaded (${(parsed.stats.fileSizeBytes / 1024).toFixed(1)} KB), but 0 records were parsed. Try switching delimiter or category below.`
+        );
+      }
     }
   };
 
@@ -199,12 +228,21 @@ export const TallyPrimeManager: React.FC<TallyPrimeManagerProps> = ({
     const file = e.target.files?.[0];
     if (!file) return;
 
+    setIsReadingFile(true);
+    setImportErrorMessage(null);
+    setImportSuccessMessage(null);
     const reader = new FileReader();
     reader.onload = (event) => {
       const text = event.target?.result as string;
-      processRawFileText(text, file.name);
+      setTimeout(() => {
+        processRawFileText(text, file.name);
+        setIsReadingFile(false);
+      }, 50);
     };
-    reader.onerror = () => setImportErrorMessage('Could not read file.');
+    reader.onerror = () => {
+      setImportErrorMessage('Could not read file from system.');
+      setIsReadingFile(false);
+    };
     reader.readAsText(file);
     e.target.value = '';
   };
@@ -215,10 +253,20 @@ export const TallyPrimeManager: React.FC<TallyPrimeManagerProps> = ({
     const file = e.dataTransfer.files?.[0];
     if (!file) return;
 
+    setIsReadingFile(true);
+    setImportErrorMessage(null);
+    setImportSuccessMessage(null);
     const reader = new FileReader();
     reader.onload = (event) => {
       const text = event.target?.result as string;
-      processRawFileText(text, file.name);
+      setTimeout(() => {
+        processRawFileText(text, file.name);
+        setIsReadingFile(false);
+      }, 50);
+    };
+    reader.onerror = () => {
+      setImportErrorMessage('Could not read dropped file.');
+      setIsReadingFile(false);
     };
     reader.readAsText(file);
   };
@@ -683,10 +731,38 @@ export const TallyPrimeManager: React.FC<TallyPrimeManagerProps> = ({
                     Export from Tally Prime via <strong>Alt+E &gt; XML (Data Interchange)</strong> or <strong>Excel Spreadsheet</strong> and drop it here.
                   </p>
 
-                  {uploadedFileName && (
-                    <div className="mt-4 inline-flex items-center gap-2 px-3 py-1.5 rounded-full bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 text-xs font-mono font-bold">
-                      <FileCode className="w-3.5 h-3.5" />
-                      Loaded: {uploadedFileName}
+                  {isReadingFile && (
+                    <div className="mt-4 inline-flex items-center gap-2.5 px-4 py-2 rounded-2xl bg-blue-100 dark:bg-blue-950/80 border border-blue-300 dark:border-blue-800 text-blue-900 dark:text-blue-200 text-xs font-bold animate-pulse shadow-xs">
+                      <RefreshCw className="w-4 h-4 animate-spin text-blue-600" />
+                      <span>Reading &amp; Analyzing Tally file... Checking XML schema, ledgers &amp; vouchers</span>
+                    </div>
+                  )}
+
+                  {!isReadingFile && uploadedFileName && (
+                    <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+                      <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 text-xs font-mono font-bold border border-emerald-300/60 dark:border-emerald-800/60">
+                        <FileCode className="w-3.5 h-3.5" />
+                        <span>Loaded: {uploadedFileName}</span>
+                        {parseStats && (
+                          <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-normal">
+                            ({(parseStats.fileSizeBytes / 1024).toFixed(1)} KB • {parseStats.fileType})
+                          </span>
+                        )}
+                      </div>
+
+                      {parseStats && (
+                        <div className="flex items-center gap-1.5 text-[11px] font-mono">
+                          <span className={`px-2 py-0.5 rounded-md ${parseStats.customersFound > 0 ? 'bg-blue-100 dark:bg-blue-950 text-blue-700 dark:text-blue-300 font-bold' : 'bg-slate-100 dark:bg-slate-800 text-slate-400'}`}>
+                            {parseStats.customersFound} Ledgers
+                          </span>
+                          <span className={`px-2 py-0.5 rounded-md ${parseStats.stockItemsFound > 0 ? 'bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 font-bold' : 'bg-slate-100 dark:bg-slate-800 text-slate-400'}`}>
+                            {parseStats.stockItemsFound} Stock Items
+                          </span>
+                          <span className={`px-2 py-0.5 rounded-md ${parseStats.invoicesFound > 0 ? 'bg-purple-100 dark:bg-purple-950 text-purple-700 dark:text-purple-300 font-bold' : 'bg-slate-100 dark:bg-slate-800 text-slate-400'}`}>
+                            {parseStats.invoicesFound} Invoices
+                          </span>
+                        </div>
+                      )}
                     </div>
                   )}
                 </div>
@@ -694,9 +770,211 @@ export const TallyPrimeManager: React.FC<TallyPrimeManagerProps> = ({
 
               {/* Status & Feedback */}
               {importErrorMessage && (
-                <div className="mt-3 p-3 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 rounded-xl text-xs text-red-700 dark:text-red-300 flex items-center gap-2">
-                  <AlertCircle className="w-4 h-4 shrink-0" />
-                  <span>{importErrorMessage}</span>
+                <div className="mt-3 p-3 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 rounded-xl text-xs text-red-700 dark:text-red-300 flex items-start gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                  <div className="flex-1">
+                    <span className="font-bold block mb-0.5">Parse Notice:</span>
+                    <span>{importErrorMessage}</span>
+                  </div>
+                </div>
+              )}
+
+              {/* Cross-Category Detected Prompt (e.g. User selected CUSTOMERS but uploaded Stock Items) */}
+              {!isReadingFile && parseStats && parseStats.totalFound > 0 && activeParsedCount === 0 && (
+                <div className="mt-3 p-3.5 bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 rounded-2xl text-xs space-y-2">
+                  <div className="flex items-center gap-2 text-amber-800 dark:text-amber-200 font-bold">
+                    <Info className="w-4 h-4 shrink-0 text-amber-600" />
+                    <span>
+                      0 records match "{selectedCategory}", but records were found in other sections!
+                    </span>
+                  </div>
+                  <div className="flex flex-wrap gap-2 pt-1">
+                    {parseStats.stockItemsFound > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedCategory('INVENTORY');
+                          setSelectedItemIndices(parsedStock.map((_, i) => i));
+                        }}
+                        className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-xl font-bold flex items-center gap-1.5 transition-colors"
+                      >
+                        <Boxes className="w-3.5 h-3.5" />
+                        <span>Switch to Stock Items ({parseStats.stockItemsFound} found)</span>
+                      </button>
+                    )}
+                    {parseStats.customersFound > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedCategory('CUSTOMERS');
+                          setSelectedItemIndices(parsedCustomers.map((_, i) => i));
+                        }}
+                        className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold flex items-center gap-1.5 transition-colors"
+                      >
+                        <Users className="w-3.5 h-3.5" />
+                        <span>Switch to Customer Ledgers ({parseStats.customersFound} found)</span>
+                      </button>
+                    )}
+                    {parseStats.invoicesFound > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSelectedCategory('INVOICES');
+                          setSelectedItemIndices(parsedInvoices.map((_, i) => i));
+                        }}
+                        className="px-3 py-1.5 bg-purple-600 hover:bg-purple-700 text-white rounded-xl font-bold flex items-center gap-1.5 transition-colors"
+                      >
+                        <Receipt className="w-3.5 h-3.5" />
+                        <span>Switch to Sales Invoices ({parseStats.invoicesFound} found)</span>
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Diagnostic & Troubleshooting Card when 0 items detected in all categories */}
+              {!isReadingFile && parseStats && parseStats.totalFound === 0 && uploadedFileName && (
+                <div className="mt-3 p-4 bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-2xl space-y-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <HelpCircle className="w-4 h-4 text-amber-500 shrink-0" />
+                      <span className="font-bold text-xs text-slate-800 dark:text-slate-200">
+                        Diagnostic Details &amp; File Structure Inspector
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setShowRawInspector(!showRawInspector)}
+                      className="text-[11px] font-bold text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1 cursor-pointer"
+                    >
+                      {showRawInspector ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
+                      <span>{showRawInspector ? 'Hide Inspector' : 'Inspect Raw File'}</span>
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px] font-mono text-slate-600 dark:text-slate-400">
+                    <div className="p-2 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800">
+                      <span className="block text-[9px] uppercase tracking-wider text-slate-400 font-bold">Format</span>
+                      <strong className="text-slate-800 dark:text-slate-200">{parseStats.fileType}</strong>
+                    </div>
+                    <div className="p-2 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800">
+                      <span className="block text-[9px] uppercase tracking-wider text-slate-400 font-bold">Size</span>
+                      <strong className="text-slate-800 dark:text-slate-200">{(parseStats.fileSizeBytes / 1024).toFixed(1)} KB</strong>
+                    </div>
+                    <div className="p-2 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800">
+                      <span className="block text-[9px] uppercase tracking-wider text-slate-400 font-bold">Records Matched</span>
+                      <strong className="text-amber-600 font-black">0 Items</strong>
+                    </div>
+                    <div className="p-2 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800">
+                      <span className="block text-[9px] uppercase tracking-wider text-slate-400 font-bold">XML Parser</span>
+                      <strong className={parseStats.hasXmlError ? 'text-red-500' : 'text-emerald-500'}>
+                        {parseStats.hasXmlError ? 'Syntax Warning' : 'OK / Valid'}
+                      </strong>
+                    </div>
+                  </div>
+
+                  {parseStats.tagsDetected.length > 0 && (
+                    <div className="text-[11px] text-slate-500 dark:text-slate-400">
+                      <strong>Tags/Columns Detected:</strong>{' '}
+                      <span className="font-mono text-[10px] bg-slate-200 dark:bg-slate-700 px-1.5 py-0.5 rounded">
+                        {parseStats.tagsDetected.join(', ')}
+                      </span>
+                    </div>
+                  )}
+
+                  {/* Troubleshooting Advice */}
+                  <div className="text-[11px] text-slate-600 dark:text-slate-400 bg-amber-50/60 dark:bg-amber-950/20 p-2.5 rounded-xl border border-amber-200/60 dark:border-amber-900/40">
+                    <span className="font-bold text-amber-800 dark:text-amber-300 block mb-1">
+                      💡 How to Export from Tally Prime so it imports instantly:
+                    </span>
+                    <ul className="list-disc list-inside space-y-0.5">
+                      <li>For Customers: <strong>Gateway of Tally &gt; Chart of Accounts &gt; Ledgers &gt; Alt+E &gt; XML</strong></li>
+                      <li>For Stock Items: <strong>Gateway of Tally &gt; Chart of Accounts &gt; Stock Items &gt; Alt+E &gt; XML</strong></li>
+                      <li>For Invoices: <strong>Gateway of Tally &gt; Day Book &gt; Alt+E &gt; XML</strong></li>
+                    </ul>
+                  </div>
+
+                  {/* Collapsible Raw Inspector & Manual Re-parser */}
+                  {showRawInspector && (
+                    <div className="space-y-3 pt-2 border-t border-slate-200 dark:border-slate-700">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span className="text-[11px] font-bold text-slate-700 dark:text-slate-300 flex items-center gap-1">
+                          <Terminal className="w-3.5 h-3.5 text-blue-500" />
+                          <span>Raw File Preview (First 30 Lines):</span>
+                        </span>
+                        <div className="flex items-center gap-1.5 text-xs">
+                          <span className="text-[10px] text-slate-400">Force Delimiter:</span>
+                          {[
+                            { id: 'auto', label: 'Auto' },
+                            { id: ',', label: 'Comma (,)' },
+                            { id: '\t', label: 'Tab (TSV)' },
+                            { id: ';', label: 'Semicolon (;)' },
+                            { id: '|', label: 'Pipe (|)' },
+                          ].map((d) => (
+                            <button
+                              key={d.id}
+                              type="button"
+                              onClick={() => {
+                                setForcedDelimiter(d.id);
+                                processRawFileText(fileContentRaw, uploadedFileName, d.id);
+                              }}
+                              className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold transition-colors ${
+                                forcedDelimiter === d.id
+                                  ? 'bg-blue-600 text-white'
+                                  : 'bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-300'
+                              }`}
+                            >
+                              {d.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      <div className="bg-slate-900 text-slate-200 p-3 rounded-xl font-mono text-[10px] max-h-48 overflow-y-auto leading-relaxed border border-slate-800">
+                        {rawSampleLines.map((line, idx) => (
+                          <div key={idx} className="flex gap-2">
+                            <span className="text-slate-600 select-none w-6 text-right shrink-0">{idx + 1}</span>
+                            <span className="break-all whitespace-pre-wrap">{line}</span>
+                          </div>
+                        ))}
+                      </div>
+
+                      {/* Manual Force Parse Buttons */}
+                      <div className="flex flex-wrap items-center gap-2 pt-1">
+                        <span className="text-[10px] font-bold text-slate-400">Force Re-parse As:</span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedCategory('CUSTOMERS');
+                            processRawFileText(fileContentRaw, uploadedFileName);
+                          }}
+                          className="px-2.5 py-1 bg-blue-100 hover:bg-blue-200 dark:bg-blue-950 dark:hover:bg-blue-900 text-blue-800 dark:text-blue-300 rounded-lg text-xs font-bold transition-colors"
+                        >
+                          Customer Ledgers
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedCategory('INVENTORY');
+                            processRawFileText(fileContentRaw, uploadedFileName);
+                          }}
+                          className="px-2.5 py-1 bg-indigo-100 hover:bg-indigo-200 dark:bg-indigo-950 dark:hover:bg-indigo-900 text-indigo-800 dark:text-indigo-300 rounded-lg text-xs font-bold transition-colors"
+                        >
+                          Stock Items
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedCategory('INVOICES');
+                            processRawFileText(fileContentRaw, uploadedFileName);
+                          }}
+                          className="px-2.5 py-1 bg-purple-100 hover:bg-purple-200 dark:bg-purple-950 dark:hover:bg-purple-900 text-purple-800 dark:text-purple-300 rounded-lg text-xs font-bold transition-colors"
+                        >
+                          Sales Invoices
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
 
