@@ -1,0 +1,114 @@
+﻿Tally Prime Data & XML Architecture: The Complete Reference Guide
+Tally Prime organizes data as an object-oriented hierarchical tree rather than relational SQL tables. Below is the full breakdown of how Invoices, Delivery Challans, Stock & Dual Serial Numbers, and Ledgers are structured, calculated, and stored.
+1. Ledgers (Parties vs. Accounts)
+In Tally, there are no separate tables for customers, suppliers, banks, or taxes. Every entity is a <LEDGER>, and its behavior is dictated entirely by its <PARENT> group:
+* Customer: <PARENT>Sundry Debtors</PARENT> (Account Receivable).
+* Vendor / Supplier: <PARENT>Sundry Creditors</PARENT> (Account Payable).
+* Bank / Cash: <PARENT>Bank Accounts</PARENT> or <PARENT>Cash-in-Hand</PARENT>.
+* Tax Accounts: <PARENT>Duties & Taxes</PARENT> (Sub-types: GST \rightarrow CGST, SGST, IGST).
+* Revenue / Expense: <PARENT>Sales Accounts</PARENT>, <PARENT>Purchase Accounts</PARENT>, etc.
+A. Core Data (Stored in Every Ledger)
+* <NAME>: Account / Party name.
+* <PARENT>: Group classification.
+* <OPENINGBALANCE>: Starting balance.
+   * Positive (> 0): Debit (Dr) \rightarrow Asset, Receivable, Expense.
+   * Negative (< 0): Credit (Cr) \rightarrow Liability, Payable, Income.
+B. Conditional / Extra Data
+* <ISBILLWISEON>: Set to Yes for parties to enable invoice-by-invoice aging.
+* <LEDGSTREGDETAILS.LIST>: Holds <GSTREGISTRATIONTYPE> (Regular, Unregistered/Consumer), State, and <GSTIN>.
+* <LEDMAILINGDETAILS.LIST>: Physical street addresses, State, Country, and PIN code.
+* Contact Details: Phone number, PAN (<INCOMETAXNUMBER>), and credit limit terms.
+2. Stock Items & Serial Numbers (Single vs. Dual Serial)
+Products are defined under <STOCKITEM> and mapped to physical quantities, warehouses, and serial numbers.
+A. Core Data (Stored for Every Stock Item)
+* <NAME>: Product name / model.
+* <PARENT>: Stock Group / category (e.g., Split AC, Copper Piping).
+* <BASEUNITS>: Unit of measure (e.g., SET, PCS, NOS).
+B. Conditional / Extra Data
+* <HSNCODE>: 8-digit HSN code for GST compliance.
+* <GSTDETAILS.LIST>: Taxability (Taxable, Exempt) and IGST/CGST/SGST tax slabs.
+* <ISBATCHWISEON>: Set to Yes when tracking individual serial or batch numbers.
+C. Handling Dual Serial Numbers (IDU & ODU)
+Appliances like Split Air Conditioners are sold as 1 SET, but physically consist of two distinct units with separate warranty numbers:
+1. IDU (Indoor Unit): The wall-mounted evaporator unit.
+2. ODU (Outdoor Unit): The external compressor/condenser cabinet.
+In Tally and billing databases, this is handled in two standard ways:
+Option 1: Paired Serial String (Single Set Item — Most Common)
+The item is billed as 1 SET, and both serials are stored in the <BATCHNAME> tag separated by a delimiter:
+<ALLINVENTORYENTRIES.LIST>
+<STOCKITEMNAME>1.5 Ton Split AC 5 Star</STOCKITEMNAME>
+<ACTUALQTY> 1 SET</ACTUALQTY>
+<BILLEDQTY> 1 SET</BILLEDQTY>
+<RATE>35000.00/SET</RATE>
+<AMOUNT>35000.00</AMOUNT>
+
+<!-- Dual Serial Number Allocation -->
+<BATCHALLOCATIONS.LIST>
+ <GODOWNNAME>Central Warehouse</GODOWNNAME>
+ <BATCHNAME>IDU:VOLT-882190 / ODU:VOLT-993412</BATCHNAME>
+ <ACTUALQTY> 1 SET</ACTUALQTY>
+ <BILLEDQTY> 1 SET</BILLEDQTY>
+ <AMOUNT>35000.00</AMOUNT>
+</BATCHALLOCATIONS.LIST>
+</ALLINVENTORYENTRIES.LIST>
+
+Option 2: Component Breakdown (Two Distinct Items)
+The invoice includes two separate line items:
+* 1.5 Ton AC - Indoor Unit \rightarrow Batch <BATCHNAME>IDU-882190</BATCHNAME> (1 NOS).
+* 1.5 Ton AC - Outdoor Unit \rightarrow Batch <BATCHNAME>ODU-993412</BATCHNAME> (1 NOS).
+3. Delivery Challan vs. Sales Invoice
+Transactions are wrapped in a <VOUCHER>.
+Feature
+	Delivery Challan (Delivery Note)
+	Sales Invoice (Sales)
+	Primary Goal
+	Physical dispatch / Handover proof
+	Commercial billing & tax filing
+	Inventory Effect
+	Deducts stock immediately from Godown
+	Deducts stock immediately from Godown
+	Financial Ledgers
+	None. <ALLLEDGERENTRIES.LIST> is empty
+	Debits Customer, Credits Sales & Tax
+	P&L / Balance Sheet
+	No change in financial statements
+	Directly updates sales revenue & GST payable
+	Bill Balance
+	No pending payment recorded
+	Creates an active pending New Ref bill
+	A. Delivery Challan Structure
+Contains only header info and <ALLINVENTORYENTRIES.LIST> with the godown and serial numbers:
+<VOUCHER VCHTYPE="Delivery Note" Action="Create">
+<DATE>20261015</DATE>
+<VOUCHERNUMBER>DC/001/26-27</VOUCHERNUMBER>
+<PARTYLEDGERNAME>Metro Cooling Center</PARTYLEDGERNAME>
+
+<ALLINVENTORYENTRIES.LIST>
+ <STOCKITEMNAME>1.5 Ton Split AC 5 Star</STOCKITEMNAME>
+ <ACTUALQTY> 1 SET</ACTUALQTY>
+ <BATCHALLOCATIONS.LIST>
+  <GODOWNNAME>Central Warehouse</GODOWNNAME>
+  <BATCHNAME>IDU:VOLT-882190 / ODU:VOLT-993412</BATCHNAME>
+  <ACTUALQTY> 1 SET</ACTUALQTY>
+ </BATCHALLOCATIONS.LIST>
+</ALLINVENTORYENTRIES.LIST>
+</VOUCHER>
+
+B. Sales Invoice Structure (Zero-Sum Balancing)
+Contains both financial lines and inventory lines. Across <ALLLEDGERENTRIES.LIST>, the amounts must mathematically sum to zero (\sum = 0):
+* Customer Debit (-41,300.00): Grand total receivable (Base 35,000 + 18% GST).
+* Sales Credit (35,000.00): Taxable goods revenue.
+* Output CGST Credit (3,150.00): 9% Central tax liability.
+* Output SGST Credit (3,150.00): 9% State tax liability.
+* Attached Inventory Lines: Product rate, quantity, warehouse, and dual serial numbers (IDU/ODU) matching the billed units.
+4. Quick Field-by-Field Reference
+Goal
+	Where to Look in Tally XML
+	Check Customer Dues
+	<LEDGER> where parent is Sundry Debtors \rightarrow inspect <OPENINGBALANCE> and <BILLALLOCATIONS.LIST>.
+	Read Invoice Total & Tax
+	<VOUCHER VCHTYPE="Sales"> \rightarrow inspect party row and tax rows inside <ALLLEDGERENTRIES.LIST>.
+	Track AC Serial (IDU/ODU)
+	Inside <ALLINVENTORYENTRIES.LIST> \rightarrow <BATCHALLOCATIONS.LIST> \rightarrow <BATCHNAME>.
+	Warehouse Location
+	Inside <BATCHALLOCATIONS.LIST> \rightarrow <GODOWNNAME>.
