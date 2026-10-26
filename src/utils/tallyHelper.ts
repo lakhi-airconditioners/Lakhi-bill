@@ -101,14 +101,12 @@ export interface TallyParseStats {
 }
 
 // ---------------------------------------------------------------------------
-// XML Sanitizers & Extraction Helpers
+// Sanitization & Extraction Helpers
 // ---------------------------------------------------------------------------
-
-// Sanitizes illegal Tally control characters (&#4;, &#1;, null bytes, etc.) that crash DOMParser
 function sanitizeTallyXml(raw: string): string {
   return raw
-    .replace(/&#[0-9]+;/g, '') // remove numeric character references like &#4;
-    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, ''); // strip ASCII control characters
+    .replace(/&#[0-9]+;/g, '') // remove illegal numeric entities like &#4;
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, ''); // strip ASCII control bytes
 }
 
 function findElements(parent: Document | Element, tagName: string): Element[] {
@@ -125,7 +123,7 @@ function getTagText(parent: Element, tagName: string): string {
 }
 
 function parseTallyDate(dateStr: string): { formatted: string; dateObj: Date } {
-  const clean = dateStr.trim();
+  const clean = (dateStr || '').trim();
   if (/^\d{8}$/.test(clean)) {
     const y = parseInt(clean.substring(0, 4), 10);
     const m = parseInt(clean.substring(4, 6), 10) - 1;
@@ -143,7 +141,7 @@ function parseTallyDate(dateStr: string): { formatted: string; dateObj: Date } {
       dateObj: fallback,
     };
   }
-  return { formatted: clean || new Date().toISOString().slice(0, 10), dateObj: new Date(0) };
+  return { formatted: clean || new Date().toISOString().slice(0, 10), dateObj: new Date() };
 }
 
 // ---------------------------------------------------------------------------
@@ -173,10 +171,10 @@ export function parseTallyXmlData(
     doc = parser.parseFromString(sanitized, 'text/xml');
     const parserError = doc.getElementsByTagName('parsererror')[0];
     if (parserError) {
-      warnings.push(`XML Parsing Notice: ${parserError.textContent?.slice(0, 150)}`);
+      warnings.push(`XML Parsing Warning: ${parserError.textContent?.slice(0, 150)}`);
     }
   } catch (err: any) {
-    warnings.push(`DOMParser execution error: ${err.message}`);
+    warnings.push(`DOMParser error: ${err.message}`);
     return {
       masters: { currencies: [], units: [], groups: [], godowns: [], stockItems: [], ledgers: [], otherLedgers: [] },
       customers: [],
@@ -217,7 +215,7 @@ export function parseTallyXmlData(
     if (name) groups.push({ name, parent: getTagText(g, 'PARENT') });
   });
 
-  // 2. Stock Items
+  // 2. Stock Items Map
   const stockItemsMap = new Map<string, ParsedTallyStockItem>();
   const parsedStockMasterList: ParsedTallyStockItem[] = [];
 
@@ -244,14 +242,13 @@ export function parseTallyXmlData(
 
   findElements(doc, 'LEDGER').forEach((led) => {
     const name = led.getAttribute('NAME') || getTagText(led, 'NAME');
-    if (!name || name === '0') return; // ignore placeholder ledger names
+    if (!name || name === '0') return; // ignore system placeholders
 
     const parent = getTagText(led, 'PARENT');
     const gstin = getTagText(led, 'GSTIN');
     const panNumber = getTagText(led, 'INCOMETAXNUMBER');
     const phone = getTagText(led, 'LEDGERMOBILE') || getTagText(led, 'PHONENUMBER');
 
-    // Addresses
     let address = '';
     const addressListTag = findElements(led, 'ADDRESS.LIST')[0];
     if (addressListTag) {
@@ -265,7 +262,6 @@ export function parseTallyXmlData(
     if (state && !address.includes(state)) address += (address ? ', ' : '') + state;
     if (pincode && !address.includes(pincode)) address += (address ? ' - ' : '') + pincode;
 
-    // Opening Balance
     const rawBalStr = getTagText(led, 'OPENINGBALANCE');
     const rawBal = parseFloat(rawBalStr) || 0;
     const absBal = Math.abs(rawBal);
@@ -316,16 +312,36 @@ export function parseTallyXmlData(
   const invoices: ParsedTallyInvoice[] = [];
   const deliveryNotes: ParsedTallyInvoice[] = [];
 
-  findElements(doc, 'VOUCHER').forEach((vch) => {
-    const vchType = vch.getAttribute('VCHTYPE') || getTagText(vch, 'VCHTYPE') || 'Sales';
+  const rawVouchers = findElements(doc, 'VOUCHER');
+
+  rawVouchers.forEach((vch) => {
+    // Check all possible places Tally stores the voucher type
+    const attrVchType = vch.getAttribute('VCHTYPE') || '';
+    const tagVchType = getTagText(vch, 'VOUCHERTYPENAME') || getTagText(vch, 'VCHTYPE') || '';
+    const parentVchType = getTagText(vch, 'PARENT') || '';
+    const rawVchType = attrVchType || tagVchType || parentVchType || 'Sales';
+
     const vchNum = getTagText(vch, 'VOUCHERNUMBER') || `VCH-${Date.now().toString().slice(-4)}`;
-    const partyName = getTagText(vch, 'PARTYLEDGERNAME');
+    const partyName = getTagText(vch, 'PARTYLEDGERNAME') || getTagText(vch, 'PARTYNAME');
     const { formatted: dateStr, dateObj } = parseTallyDate(getTagText(vch, 'DATE'));
     const narration = getTagText(vch, 'NARRATION');
 
+    // Robust Delivery Note / Challan Detection
+    const combinedTypeStr = `${attrVchType} ${tagVchType} ${parentVchType} ${vchNum}`.toLowerCase();
+    const isDelivery =
+      combinedTypeStr.includes('delivery') ||
+      combinedTypeStr.includes('challan') ||
+      combinedTypeStr.includes('dispatch') ||
+      combinedTypeStr.includes('dc/') ||
+      combinedTypeStr.startsWith('dc') ||
+      combinedTypeStr.includes('material out') ||
+      // In Tally, delivery notes have inventory entries but ZERO ledger entries
+      (findElements(vch, 'ALLINVENTORYENTRIES.LIST').length > 0 &&
+       findElements(vch, 'ALLLEDGERENTRIES.LIST').length === 0);
+
     // Auto-enrich party details
     const partyMaster = ledgerMasterMap.get(partyName.toLowerCase());
-    const gstin = partyMaster?.gstin || '';
+    const gstin = partyMaster?.gstin || getTagText(vch, 'PARTYGSTIN') || '';
     const billingAddress = partyMaster?.billingAddress || 'Store Pickup';
     const customerPhone = partyMaster?.phone || '';
 
@@ -356,7 +372,7 @@ export function parseTallyXmlData(
       if (batchList.length > 0) {
         godownName = getTagText(batchList[0], 'GODOWNNAME');
         const batchName = getTagText(batchList[0], 'BATCHNAME');
-        if (batchName.includes('/') || batchName.includes('IDU') || batchName.includes('ODU')) {
+        if (batchName.includes('/') || /idu|odu/i.test(batchName)) {
           const parts = batchName.split('/').map((s) => s.trim());
           parts.forEach((p) => {
             if (/idu:/i.test(p)) iduSerial = p.replace(/idu:/i, '').trim();
@@ -384,7 +400,7 @@ export function parseTallyXmlData(
       });
     });
 
-    // Ledger balancing
+    // Ledger entries
     const ledgers: Array<{ name: string; rawAmount: number; displayAmount: number; type: 'Debit' | 'Credit' }> = [];
     let sumRaw = 0;
     let cgst = 0;
@@ -416,14 +432,13 @@ export function parseTallyXmlData(
       }
     });
 
-    const isDelivery = vchType.toLowerCase().includes('delivery') || vchType.toLowerCase().includes('challan');
     const effectiveTotal = customerTotal > 0 ? customerTotal : taxableTotal + cgst + sgst + igst;
 
-    const invoiceRecord: ParsedTallyInvoice = {
+    const record: ParsedTallyInvoice = {
       invoiceNumber: vchNum,
       date: dateStr,
       dateObj,
-      vchType,
+      vchType: isDelivery ? 'Delivery Challan' : rawVchType,
       customerName: partyName,
       customerPhone,
       billingAddress,
@@ -442,13 +457,64 @@ export function parseTallyXmlData(
     };
 
     if (isDelivery) {
-      deliveryNotes.push(invoiceRecord);
+      deliveryNotes.push(record);
     } else {
-      invoices.push(invoiceRecord);
+      invoices.push(record);
     }
   });
 
-  // Sort Chronologically Ascending
+  // 5. Synthesis: If only Bill Allocations exist in a Master file, synthesize them
+  if (invoices.length === 0 && deliveryNotes.length === 0 && rawVouchers.length === 0) {
+    customers.forEach((c) => {
+      if (c.billAllocations && c.billAllocations.length > 0) {
+        c.billAllocations.forEach((b, bIdx) => {
+          const { formatted: dStr, dateObj: dObj } = parseTallyDate(b.billDate || '');
+          const isDcRef = /dc|\bchallan\b/i.test(b.billName);
+
+          const synthesizedRecord: ParsedTallyInvoice = {
+            invoiceNumber: b.billName,
+            date: dStr,
+            dateObj: dObj,
+            vchType: isDcRef ? 'Delivery Challan (Bill Allocation)' : 'Sales (Bill Allocation)',
+            customerName: c.externalName,
+            customerPhone: c.phone,
+            billingAddress: c.billingAddress,
+            gstin: c.gstin,
+            taxableAmount: b.amount / 1.18,
+            cgstAmount: (b.amount - b.amount / 1.18) / 2,
+            sgstAmount: (b.amount - b.amount / 1.18) / 2,
+            igstAmount: 0,
+            totalAmount: b.amount,
+            narration: `Synthesized from Tally Bill Allocation: ${b.billName}`,
+            matchedCustomerId: c.existingMatchId,
+            matchedCustomerName: c.externalName,
+            isZeroSumBalanced: true,
+            items: [
+              {
+                id: `bill-it-${b.billName}-${bIdx}`,
+                name: `AC Unit Ref #${b.billName}`,
+                modelNo: 'TALLY-ALLOCATION',
+                quantity: 1,
+                rate: b.amount,
+                amount: b.amount,
+              },
+            ],
+            ledgers: [
+              { name: c.externalName, rawAmount: -b.amount, displayAmount: b.amount, type: 'Credit' },
+              { name: 'Sales Account', rawAmount: b.amount, displayAmount: b.amount, type: 'Debit' },
+            ],
+          };
+
+          if (isDcRef) {
+            deliveryNotes.push(synthesizedRecord);
+          } else {
+            invoices.push(synthesizedRecord);
+          }
+        });
+      }
+    });
+  }
+  // Sort Chronologically Ascending by Date, then Voucher Number
   invoices.sort((a, b) => a.dateObj.getTime() - b.dateObj.getTime() || a.invoiceNumber.localeCompare(b.invoiceNumber));
   deliveryNotes.sort((a, b) => a.dateObj.getTime() - b.dateObj.getTime() || a.invoiceNumber.localeCompare(b.invoiceNumber));
 

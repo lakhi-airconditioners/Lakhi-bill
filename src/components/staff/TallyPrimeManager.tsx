@@ -104,10 +104,12 @@ export const TallyPrimeManager: React.FC<TallyPrimeManagerProps> = ({
     invoices,
     quotations,
     shipments,
+    payables,
     addCustomer,
     updateCustomer,
     addInventoryItem,
     addInvoice,
+    addPayable,
     createAnyDocument,
     updateAnyDocument,
     gstNumber,
@@ -183,7 +185,7 @@ export const TallyPrimeManager: React.FC<TallyPrimeManagerProps> = ({
 
     const isXml = filename.toLowerCase().endsWith('.xml') || text.trim().startsWith('<');
 
-    if (isXml) {
+if (isXml) {
       const parsed = parseTallyXmlData(text, customers);
       setParsedMasterSummary(parsed.masters);
       setParsedCustomers(parsed.customers);
@@ -195,25 +197,27 @@ export const TallyPrimeManager: React.FC<TallyPrimeManagerProps> = ({
       setParseWarnings(parsed.warnings);
       setRawSampleLines(parsed.rawSampleLines);
 
-      // Auto-switch category based on which items were found
-      if (parsed.customers.length > 0 && selectedCategory !== 'CUSTOMERS') {
-        setSelectedCategory('CUSTOMERS');
-        setSelectedItemIndices(parsed.customers.map((_, i) => i));
-      } else if (parsed.dealers.length > 0 && selectedCategory !== 'DEALERS') {
-        setSelectedCategory('DEALERS');
-        setSelectedItemIndices(parsed.dealers.map((_, i) => i));
-      } else if (parsed.stockItems.length > 0 && selectedCategory !== 'INVENTORY') {
-        setSelectedCategory('INVENTORY');
-        setSelectedItemIndices(parsed.stockItems.map((_, i) => i));
-      } else if (parsed.invoices.length > 0 && selectedCategory !== 'INVOICES') {
-        setSelectedCategory('INVOICES');
-        setSelectedItemIndices(parsed.invoices.map((_, i) => i));
-      } else if (parsed.deliveryNotes.length > 0 && selectedCategory !== 'DELIVERY_NOTES') {
+      // FIX: Check if the currently selected category has items; keep it if it does!
+      const currentCount = getActiveCategoryCount(selectedCategory, parsed);
+      if (currentCount > 0) {
+        setSelectedItemIndices(Array.from({ length: currentCount }, (_, i) => i));
+      } else if (parsed.deliveryNotes.length > 0) {
         setSelectedCategory('DELIVERY_NOTES');
         setSelectedItemIndices(parsed.deliveryNotes.map((_, i) => i));
+      } else if (parsed.invoices.length > 0) {
+        setSelectedCategory('INVOICES');
+        setSelectedItemIndices(parsed.invoices.map((_, i) => i));
+      } else if (parsed.customers.length > 0) {
+        setSelectedCategory('CUSTOMERS');
+        setSelectedItemIndices(parsed.customers.map((_, i) => i));
+      } else if (parsed.dealers.length > 0) {
+        setSelectedCategory('DEALERS');
+        setSelectedItemIndices(parsed.dealers.map((_, i) => i));
+      } else if (parsed.stockItems.length > 0) {
+        setSelectedCategory('INVENTORY');
+        setSelectedItemIndices(parsed.stockItems.map((_, i) => i));
       } else {
-        const count = getActiveCategoryCount(selectedCategory, parsed);
-        setSelectedItemIndices(Array.from({ length: count }, (_, i) => i));
+        setSelectedItemIndices([]);
       }
 
       if (parsed.stats.totalFound === 0) {
@@ -369,6 +373,9 @@ export const TallyPrimeManager: React.FC<TallyPrimeManagerProps> = ({
       let importedCount = 0;
       let mergedCount = 0;
       let replacedCount = 0;
+      let billsCreatedCount = 0;
+      let shipmentsCreatedCount = 0;
+      let payablesCreatedCount = 0;
 
       // 1. CUSTOMERS (Sundry Debtors)
       if (selectedCategory === 'CUSTOMERS') {
@@ -376,7 +383,9 @@ export const TallyPrimeManager: React.FC<TallyPrimeManagerProps> = ({
           const item = parsedCustomers[idx];
           if (!item) continue;
 
-          if (item.existingMatchId) {
+          let effectiveCustId = item.existingMatchId;
+
+          if (effectiveCustId) {
             if (importStrategy === 'MERGE') {
               const mergePayload: Partial<Customer> = {
                 notes: `Tally Merged (${new Date().toLocaleDateString()}): ${item.notes || ''}`,
@@ -387,11 +396,11 @@ export const TallyPrimeManager: React.FC<TallyPrimeManagerProps> = ({
               if (item.gstin) mergePayload.gstin = item.gstin;
               if (item.accountBalance !== undefined) mergePayload.accountBalance = item.accountBalance;
 
-              await updateCustomer(item.existingMatchId, mergePayload);
+              await updateCustomer(effectiveCustId, mergePayload);
               mergedCount++;
             } else {
               // REPLACE
-              await updateCustomer(item.existingMatchId, {
+              await updateCustomer(effectiveCustId, {
                 externalName: item.externalName || 'Customer',
                 phone: item.phone || '',
                 email: item.email || '',
@@ -404,7 +413,7 @@ export const TallyPrimeManager: React.FC<TallyPrimeManagerProps> = ({
               replacedCount++;
             }
           } else {
-            await addCustomer({
+            effectiveCustId = await addCustomer({
               externalName: item.externalName || 'Customer',
               phone: item.phone || '',
               email: item.email || '',
@@ -416,6 +425,242 @@ export const TallyPrimeManager: React.FC<TallyPrimeManagerProps> = ({
             });
             importedCount++;
           }
+
+          if (!effectiveCustId) continue;
+
+          // A) Auto-create Invoices from Bill Allocations detected on Customer Ledger
+          if (item.billAllocations && item.billAllocations.length > 0) {
+            for (let bIdx = 0; bIdx < item.billAllocations.length; bIdx++) {
+              const b = item.billAllocations[bIdx];
+              const cleanBillName = b.billName.trim();
+              if (!cleanBillName) continue;
+
+              const existingBill = invoices.find(
+                (inv) =>
+                  (inv.customerId === effectiveCustId ||
+                    (inv.customerExternalName && inv.customerExternalName.toLowerCase() === item.externalName.toLowerCase())) &&
+                  (inv.id === cleanBillName || (inv.notes && inv.notes.includes(cleanBillName)))
+              );
+
+              if (!existingBill) {
+                // Check if a detailed voucher exists in parsedInvoices for this bill name
+                const detailedVoucher = parsedInvoices.find(
+                  (vch) => vch.invoiceNumber.toLowerCase() === cleanBillName.toLowerCase()
+                );
+
+                if (detailedVoucher) {
+                  const subtotal = detailedVoucher.taxableAmount || detailedVoucher.totalAmount / 1.18;
+                  const taxAmount =
+                    detailedVoucher.cgstAmount && detailedVoucher.sgstAmount
+                      ? detailedVoucher.cgstAmount + detailedVoucher.sgstAmount + (detailedVoucher.igstAmount || 0)
+                      : detailedVoucher.totalAmount - subtotal;
+
+                  await addInvoice(
+                    {
+                      customerId: effectiveCustId,
+                      customerExternalName: item.externalName,
+                      customerPhone: item.phone || detailedVoucher.customerPhone || '9800000000',
+                      billingAddress: item.billingAddress || detailedVoucher.billingAddress || 'Store Pickup',
+                      installationAddress: item.installationAddress || item.billingAddress || 'Store Pickup',
+                      items: detailedVoucher.items.map((it, itIdx) => ({
+                        id: `inv-it-${Date.now()}-${itIdx}`,
+                        name: it.name,
+                        modelNo: it.modelNo || 'STANDARD',
+                        indoorModelNo: it.indoorModelNo,
+                        outdoorModelNo: it.outdoorModelNo,
+                        indoorUnitSerial: it.indoorUnitSerial,
+                        outdoorUnitSerial: it.outdoorUnitSerial,
+                        serialNo: it.serialNo,
+                        type: 'AC',
+                        brand: 'Daikin',
+                        quantity: it.quantity,
+                        rate: it.rate,
+                        taxPercent: 18,
+                        isAmountWithTax: true,
+                        discount: 0,
+                        lineTotal: it.amount,
+                      })),
+                      subtotal,
+                      taxAmount,
+                      discountAmount: 0,
+                      totalAmount: detailedVoucher.totalAmount,
+                      prepaidSplits: {
+                        fromBalance: 0,
+                        upi: { amount: 0, receivingBank: '', utr: '' },
+                        card: { amount: 0, receivingBank: '', authId: '' },
+                        chequeOrNeft: { amount: 0, chequeOrSlipOrUtr: '', bank: '' },
+                        cash: { amount: 0, drawerRegister: '' },
+                      },
+                      totalPrepaid: 0,
+                      amountDue: detailedVoucher.totalAmount,
+                      paymentStatus: 'UNPAID',
+                      notes: detailedVoucher.narration || `Imported from Tally Prime Voucher #${detailedVoucher.invoiceNumber}`,
+                    },
+                    detailedVoucher.invoiceNumber
+                  );
+                } else {
+                  // Standard opening bill allocation invoice
+                  await addInvoice(
+                    {
+                      customerId: effectiveCustId,
+                      customerExternalName: item.externalName,
+                      customerPhone: item.phone || '9800000000',
+                      billingAddress: item.billingAddress || 'Store Pickup',
+                      installationAddress: item.installationAddress || item.billingAddress || 'Store Pickup',
+                      items: [
+                        {
+                          id: `bill-it-${Date.now()}-${bIdx}`,
+                          name: `Outstanding Bill / Tally Allocation: ${cleanBillName}`,
+                          modelNo: 'TALLY-OPENING-BILL',
+                          type: 'AC',
+                          brand: 'Daikin',
+                          quantity: 1,
+                          rate: b.amount,
+                          taxPercent: 0,
+                          isAmountWithTax: true,
+                          discount: 0,
+                          lineTotal: b.amount,
+                        },
+                      ],
+                      subtotal: b.amount,
+                      taxAmount: 0,
+                      discountAmount: 0,
+                      totalAmount: b.amount,
+                      prepaidSplits: {
+                        fromBalance: 0,
+                        upi: { amount: 0, receivingBank: '', utr: '' },
+                        card: { amount: 0, receivingBank: '', authId: '' },
+                        chequeOrNeft: { amount: 0, chequeOrSlipOrUtr: '', bank: '' },
+                        cash: { amount: 0, drawerRegister: '' },
+                      },
+                      totalPrepaid: 0,
+                      amountDue: b.amount,
+                      paymentStatus: 'UNPAID',
+                      notes: `Auto-created from Tally Customer Bill Allocation: ${cleanBillName}`,
+                    },
+                    cleanBillName
+                  );
+                }
+                billsCreatedCount++;
+              }
+            }
+          }
+
+          // B) Auto-create Invoices from parsed Vouchers in the XML file for this customer
+          const matchedVouchers = parsedInvoices.filter(
+            (vch) =>
+              (vch.customerName && vch.customerName.toLowerCase() === item.externalName.toLowerCase()) ||
+              (item.gstin && vch.gstin && vch.gstin.toLowerCase() === item.gstin.toLowerCase()) ||
+              vch.matchedCustomerId === effectiveCustId
+          );
+
+          for (const vch of matchedVouchers) {
+            const existingInv = invoices.find(
+              (inv) => inv.id === vch.invoiceNumber || (inv.notes && inv.notes.includes(vch.invoiceNumber))
+            );
+
+            if (!existingInv) {
+              const subtotal = vch.taxableAmount || vch.totalAmount / 1.18;
+              const taxAmount =
+                vch.cgstAmount && vch.sgstAmount
+                  ? vch.cgstAmount + vch.sgstAmount + (vch.igstAmount || 0)
+                  : vch.totalAmount - subtotal;
+
+              await addInvoice(
+                {
+                  customerId: effectiveCustId,
+                  customerExternalName: item.externalName,
+                  customerPhone: item.phone || vch.customerPhone || '9800000000',
+                  billingAddress: item.billingAddress || vch.billingAddress || 'Store Pickup',
+                  installationAddress: item.installationAddress || item.billingAddress || 'Store Pickup',
+                  items: vch.items.map((it, itIdx) => ({
+                    id: `inv-it-${Date.now()}-${itIdx}`,
+                    name: it.name,
+                    modelNo: it.modelNo || 'STANDARD',
+                    indoorModelNo: it.indoorModelNo,
+                    outdoorModelNo: it.outdoorModelNo,
+                    indoorUnitSerial: it.indoorUnitSerial,
+                    outdoorUnitSerial: it.outdoorUnitSerial,
+                    serialNo: it.serialNo,
+                    type: 'AC',
+                    brand: 'Daikin',
+                    quantity: it.quantity,
+                    rate: it.rate,
+                    taxPercent: 18,
+                    isAmountWithTax: true,
+                    discount: 0,
+                    lineTotal: it.amount,
+                  })),
+                  subtotal,
+                  taxAmount,
+                  discountAmount: 0,
+                  totalAmount: vch.totalAmount,
+                  prepaidSplits: {
+                    fromBalance: 0,
+                    upi: { amount: 0, receivingBank: '', utr: '' },
+                    card: { amount: 0, receivingBank: '', authId: '' },
+                    chequeOrNeft: { amount: 0, chequeOrSlipOrUtr: '', bank: '' },
+                    cash: { amount: 0, drawerRegister: '' },
+                  },
+                  totalPrepaid: 0,
+                  amountDue: vch.totalAmount,
+                  paymentStatus: 'UNPAID',
+                  notes: vch.narration || `Imported from Tally Prime Voucher #${vch.invoiceNumber}`,
+                },
+                vch.invoiceNumber
+              );
+              billsCreatedCount++;
+            }
+          }
+
+          // C) Auto-create Delivery Notes (Shipments) for this customer if present in XML
+          const matchedDeliveryNotes = parsedDeliveryNotes.filter(
+            (del) =>
+              (del.customerName && del.customerName.toLowerCase() === item.externalName.toLowerCase()) ||
+              (item.gstin && del.gstin && del.gstin.toLowerCase() === item.gstin.toLowerCase()) ||
+              del.matchedCustomerId === effectiveCustId
+          );
+
+          for (const del of matchedDeliveryNotes) {
+            const existingShip = shipments.find(
+              (s) => s.id === del.invoiceNumber || s.trackingUpdates?.some((t) => t.message.includes(del.invoiceNumber))
+            );
+
+            if (!existingShip) {
+              const itemsSummary = del.items
+                .map(
+                  (it) =>
+                    `${it.name} (Qty: ${it.quantity}${it.indoorUnitSerial ? `, IDU: ${it.indoorUnitSerial}` : ''}${
+                      it.outdoorUnitSerial ? `, ODU: ${it.outdoorUnitSerial}` : ''
+                    })`
+                )
+                .join(' | ');
+
+              await createAnyDocument(
+                'shipments',
+                {
+                  customerId: effectiveCustId,
+                  customerExternalName: item.externalName,
+                  customerPhone: item.phone || del.customerPhone || '9800000000',
+                  deliveryAddress: item.billingAddress || del.billingAddress || 'Delivery Location',
+                  installationAddress: item.installationAddress || item.billingAddress || 'Delivery Location',
+                  itemsSummary,
+                  status: 'ORDER_PLACED',
+                  outForDeliveryEnabled: false,
+                  trackingUpdates: [
+                    {
+                      id: `trk-${Date.now()}`,
+                      timestamp: new Date().toISOString(),
+                      message: `Imported from Tally Delivery Note Challan #${del.invoiceNumber}`,
+                    },
+                  ],
+                  createdAt: new Date().toISOString(),
+                },
+                del.invoiceNumber
+              );
+              shipmentsCreatedCount++;
+            }
+          }
         }
       }
       // 2. DEALERS / SUPPLIERS (Sundry Creditors)
@@ -424,7 +669,9 @@ export const TallyPrimeManager: React.FC<TallyPrimeManagerProps> = ({
           const item = parsedDealers[idx];
           if (!item) continue;
 
-          if (item.existingMatchId) {
+          let effectiveCustId = item.existingMatchId;
+
+          if (effectiveCustId) {
             if (importStrategy === 'MERGE') {
               const mergePayload: Partial<Customer> = {
                 notes: `Dealer Supplier Merged (${new Date().toLocaleDateString()}): ${item.notes || ''}`,
@@ -435,10 +682,10 @@ export const TallyPrimeManager: React.FC<TallyPrimeManagerProps> = ({
               if (item.gstin) mergePayload.gstin = item.gstin;
               if (item.accountBalance !== undefined) mergePayload.accountBalance = -Math.abs(item.accountBalance);
 
-              await updateCustomer(item.existingMatchId, mergePayload);
+              await updateCustomer(effectiveCustId, mergePayload);
               mergedCount++;
             } else {
-              await updateCustomer(item.existingMatchId, {
+              await updateCustomer(effectiveCustId, {
                 externalName: item.externalName || 'Dealer Supplier',
                 phone: item.phone || '',
                 email: item.email || '',
@@ -450,7 +697,7 @@ export const TallyPrimeManager: React.FC<TallyPrimeManagerProps> = ({
               replacedCount++;
             }
           } else {
-            await addCustomer({
+            effectiveCustId = await addCustomer({
               externalName: item.externalName || 'Dealer Supplier',
               internalName: `Dealer / Supplier (${item.tallyParent || 'Sundry Creditors'})`,
               phone: item.phone || '',
@@ -462,6 +709,31 @@ export const TallyPrimeManager: React.FC<TallyPrimeManagerProps> = ({
               notes: item.notes || 'Imported from Tally Prime Sundry Creditors',
             });
             importedCount++;
+          }
+
+          // Auto-create Vendor Payables for Dealer Bill Allocations
+          if (item.billAllocations && item.billAllocations.length > 0) {
+            for (const b of item.billAllocations) {
+              const cleanBillName = b.billName.trim();
+              if (!cleanBillName) continue;
+
+              const existingPayable = payables.find(
+                (p) => p.billReference === cleanBillName || (p.notes && p.notes.includes(cleanBillName))
+              );
+
+              if (!existingPayable) {
+                await addPayable({
+                  vendorName: item.externalName,
+                  vendorPhone: item.phone,
+                  billReference: cleanBillName,
+                  amount: b.amount,
+                  category: 'SUPPLIER_STOCK',
+                  notes: `Auto-created from Tally Dealer Bill Allocation: ${cleanBillName}${item.gstin ? ` (GSTIN: ${item.gstin})` : ''}`,
+                  status: 'PENDING',
+                });
+                payablesCreatedCount++;
+              }
+            }
           }
         }
       }
@@ -652,8 +924,18 @@ export const TallyPrimeManager: React.FC<TallyPrimeManagerProps> = ({
       }
 
       const modeMsg = importStrategy === 'MERGE' ? `Merged ${mergedCount}, Added ${importedCount}` : `Replaced ${replacedCount}, Added ${importedCount}`;
+      const extraMsg = [
+        billsCreatedCount > 0 ? `Auto-Created ${billsCreatedCount} Invoice Bill(s)` : '',
+        shipmentsCreatedCount > 0 ? `Auto-Created ${shipmentsCreatedCount} Shipment Dispatch(es)` : '',
+        payablesCreatedCount > 0 ? `Auto-Created ${payablesCreatedCount} Vendor Payable(s)` : '',
+      ]
+        .filter(Boolean)
+        .join(' • ');
+
       setImportSuccessMessage(
-        `Success! Processed ${selectedItemIndices.length} ${selectedCategory.toLowerCase()} record(s). (${modeMsg})`
+        `Success! Processed ${selectedItemIndices.length} ${selectedCategory.toLowerCase()} record(s). (${modeMsg}${
+          extraMsg ? `; ${extraMsg}` : ''
+        })`
       );
       setSelectedItemIndices([]);
     } catch (err: any) {
