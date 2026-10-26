@@ -1,171 +1,160 @@
-# Implementation Plan: Universal Store AI, Customer Copilot, Notification Center, Logo Customization & Bidirectional +91 Phone Matcher
+# Tally Prime Masters & Transactions XML Parser & Sorter
 
-This plan details the end-to-end implementation for the features requested:
-1. **Configurable Brand Logos**: Full customization for 1x1 app logo, main logo, and main logo with the word "Lakhi", with live app-wide sync and favicon/PWA manifest support.
-2. **Real-Time Updates & In-App Notification Center**: Both browser push notifications and an in-app notification center log for customer updates (invoices, shipments, quotations, payments), with permission prompt and unread highlights.
-3. **Session Persistence (Installed App vs Website)**: Indefinite session storage in `localStorage` for installed web apps (PWA / standalone mode) until manual logout, while keeping standard website tab sessions transient.
-4. **72-Hour Claim Refresh Persistence**: Persisting active 72-hour claims in storage and Firestore so refreshing the page preserves the active claim state, countdown, and resolution.
-5. **Smart Customer Code & Bidirectional Phone Matcher (`+91...` & Raw Resolver)**:
-   - Auto-detecting if an input is numeric, code, or a phone number.
-   - Extracting the raw core number (stripping `+91`, `91`, leading `0`, spaces, hyphens).
-   - Multi-step pattern search: querying `raw`, `+91{raw}`, `+91 {raw}`, `91{raw}`, `0{raw}`, and checking stored phone normalization where `normalize(storedPhone) === raw`.
-   - Simultaneous fallback checking against Customer ID / Customer Code.
-6. **Customer AI Assistant**: Dedicated in-app copilot for customers to ask questions about their invoices, shipments, deliveries, warranties, quotations, and account balances.
-7. **Store AI Universal Copilot**: Full task execution across invoices (edit discounts, create, delete with confirmation), inventory, quotations, shipments, and customer sessions.
-8. **Console Error Auditing & Fixes**: Eliminating console warnings and errors.
+An enhanced Tally XML engine capable of parsing unified `Masters & Transactions` XML payloads containing `<UNIT>`, `<GODOWN>`, `<STOCKITEM>`, `<LEDGER>`, `<VOUCHER VCHTYPE="Delivery Note">`, and `<VOUCHER VCHTYPE="Sales">` nodes with dual serial numbers (`IDU:... / ODU:...`), zero-sum ledger balancing, master lookup enrichment, and YYYYMMDD date sorting.
 
 ---
 
-## 1. User Review Required
+## User Review & Critical Decisions
 
 > [!IMPORTANT]
-> - **Irreversible AI Actions**: Per user clarification, the Store AI will present a quick inline confirmation card before executing destructive or high-impact actions (e.g., deleting an invoice, altering discounts, or deleting inventory items).
-> - **Push Notifications**: Browser notifications require user permission. An in-app banner will politely prompt users to enable browser notifications; in-app notification badges and the log menu will always work regardless of browser permission.
-> - **Installed App Login**: Customer login persistence is tied to `(display-mode: standalone)`. In standalone mode, sessions remain stored indefinitely; in standard browser tabs, sessions do not persist across browser restarts.
-> - **Phone Matcher (+91 System)**: Works bidirectionally. Whether the customer enters a raw 10-digit number, `+91...`, `91...`, or `0...`, and whether the customer record in the database was saved with `+91`, `91`, `0`, or raw format, the system finds the exact match.
+> The following confirmed choices govern the implementation:
+
+- **Confirmed Decision 1: Chronological Sorting Order**
+  Transactions will be parsed from `<DATE>YYYYMMDD</DATE>` into standard datetime objects and sorted **chronologically ascending by Date**, then alphabetically by Voucher Number.
+- **Confirmed Decision 2: Master Metadata Enrichment**
+  Voucher inventory lines and party entries will be automatically cross-referenced with Master `<LEDGER>` and `<STOCKITEM>` tags to pull GSTIN, GST Registration Type, HSN Codes, Stock Parent Groups, and Base Units.
+- **Confirmed Decision 3: Zero-Sum Sign Normalization**
+  Zero-sum Tally ledger entries ($\sum \text{AMOUNT} = 0$, e.g. Party `-41,300.00`, Sales `35,000.00`, CGST `3,150.00`, SGST `3,150.00`) will be normalized into positive party debit totals, taxable revenue, and tax subtotals in UI views while preserving underlying math.
+- **Confirmed Decision 4: Delivery Note vs. Sales Voucher Architecture**
+  - **Delivery Note (`VCHTYPE="Delivery Note"`)**: Parsed as inventory-only dispatches with Godown and dual serial numbers (`idu_serial` & `odu_serial`) without requiring financial ledger entries.
+  - **Sales Invoice (`VCHTYPE="Sales"`)**: Parsed as complete commercial billing vouchers with both itemized inventory batch allocations and balanced accounting ledger entries.
 
 ---
 
-## 2. Proposed Changes
+## 1. Overview & Core Concept
 
-### Component 1: Logo Customization & App-Wide Display
-#### Files: `src/context/AppContext.tsx`, `src/components/common/LakhiLogo.tsx`, `src/components/staff/BrandLogoManager.tsx`, `src/components/Header.tsx`
-- Ensure `BrandLogos` interface cleanly supports:
-  - `logo1x1`: Square 1:1 icon for app shortcuts, mobile home screens, favicon, and compact avatars.
-  - `logoMain`: Symbol / emblem mark for headers, cards, and icons.
-  - `logoWithWordmark`: Full horizontal logo including the word "Lakhi" (or custom brand title) for main navigation bars, splash screens, and PDF invoice headers.
-- Update `LakhiLogo.tsx` to handle all 3 variants (`'1x1' | 'main' | 'wordmark' | 'full'`), falling back gracefully to SVG brand artwork if a custom image is not yet set.
-- In `BrandLogoManager.tsx`, provide dedicated upload/URL/preset sections for all three logo types with live preview in mobile, desktop header, and PDF print preview.
-- Sync `logo1x1` dynamically to HTML `<link rel="icon">` and `<link rel="apple-touch-icon">`.
+### What It Does
+1. **Master Section Extraction**: Parses `<UNIT>` (e.g. `SET`), `<GODOWN>` (e.g. `Central Warehouse`), `<STOCKITEM>` (HSNCode `84151010`, Parent `Split AC`, Unit `SET`), and `<LEDGER>` (`Sundry Debtors`, GSTIN `24AJUPS3679Q1ZW`, `Regular` registration type).
+2. **Dual Serial Extraction**: Automatically parses `<BATCHNAME>IDU:VOLT-882190 / ODU:VOLT-993412</BATCHNAME>` into `idu_serial` (`VOLT-882190`) and `odu_serial` (`VOLT-993412`).
+3. **Transaction Date Parsing & Sorting**: Converts YYYYMMDD strings (e.g. `20261014` $\rightarrow$ `2026-10-14`) into Javascript `Date` objects and sorts all vouchers by Date ascending, then Voucher Number.
+4. **Master Enrichment Engine**: Links `Metro Cooling Center` in vouchers to Master Ledger GSTIN (`24AJUPS3679Q1ZW`) and `1.5 Ton Split AC 5 Star` to HSN Code `84151010`.
 
 ---
 
-### Component 2: Session Persistence & 72-Hour Claim Fix
-#### Files: `src/context/AppContext.tsx`, `src/components/customer/CustomerPortal.tsx`
-- **Installed App Detection**:
-  - Implement `isInstalledWebApp()` utility: checks `window.matchMedia('(display-mode: standalone)').matches` or `(window.navigator as any).standalone === true`.
-  - When a customer logs in:
-    - If running as installed web app: persist `activeCustomer` ID and details into `localStorage` (`lakhi_pwa_customer_session`). Upon app launch, automatically restore the customer session indefinitely until they click Log Out.
-    - If running in standard browser tab: store session in `sessionStorage` or component state only, clearing when the browser tab is closed so it does not persist across restarts.
-- **72-Hour Claim Persistence Fix**:
-  - When a customer generates a 72-hour claim, save the claim record (`claimCode`, `customerId`, `name`, `phone`, `timestamp`) into `localStorage` (`lakhi_active_72h_claim`).
-  - On page refresh, check for an existing active claim less than 72 hours old; if present, verify its latest status from Firestore `claims` collection and keep the claim UI active with the code, countdown, and status.
-  - When approved or manually dismissed, clear the stored claim.
+## 2. User Experience & Visual Design
+
+### Key User Flows
+1. **1-Click Sample Test Drive**:
+   - Click **"Load Masters & Transactions Sample XML"** in the Tally Integration Hub to instantly test the exact provided XML payload.
+2. **Master & Transaction Register View**:
+   - View Masters Summary Cards (`1 Units`, `1 Godown`, `1 Stock Item`, `1 Ledger`).
+   - View Chronologically Sorted Transaction Register showing:
+     - **DC/001/26-27** (Delivery Note • Date: Oct 14, 2026 • Godown: Central Warehouse • IDU: VOLT-882190 | ODU: VOLT-993412)
+     - **INV/001/26-27** (Sales Invoice • Date: Oct 15, 2026 • Total: ₹41,300.00 • Taxable: ₹35,000.00 • CGST: ₹3,150.00 • SGST: ₹3,150.00 • GSTIN: 24AJUPS3679Q1ZW • HSN: 84151010)
+
+### Visual Identity & Theme
+- **Style**: High-density B2B SaaS Dashboard conforming to Lakhi ERP guidelines.
+- **Color Palette**: Slate neutral canvas, Crimson primary accent (`#DC2626`), Teal for Delivery Notes, Purple for Sales Invoices, Emerald for Master Badges.
+- **Typography**: `Plus Jakarta Sans` for headers, `font-mono tabular-nums` (`JetBrains Mono`) for dates, voucher numbers, serials, and tax figures.
 
 ---
 
-### Component 3: Smart Customer Code & Bidirectional `+91` Phone Matcher
-#### Files: `src/utils/phoneMatcher.ts`, `src/context/AppContext.tsx`, `src/components/customer/CustomerPortal.tsx`
-- Build a dedicated utility `phoneMatcher.ts` with:
-  1. **Raw Extractor**:
-     - Strips formatting: spaces, hyphens, parentheses.
-     - Strips country prefix `+91`, `91`, and leading `0` to extract the canonical 10-digit `rawNumber`.
-     - Example: `"+91 98765-43210"` -> `9876543210`; `"09876543210"` -> `9876543210`; `"919876543210"` -> `9876543210`.
-  2. **Candidate Permutations (`___ + raw`)**:
-     - `raw`: `${raw}` (e.g. `9876543210`)
-     - `plus91`: `+91${raw}` (e.g. `+919876543210`)
-     - `plus91Space`: `+91 ${raw}` (e.g. `+91 9876543210`)
-     - `ninetyOne`: `91${raw}` (e.g. `919876543210`)
-     - `zeroPrefix`: `0${raw}` (e.g. `09876543210`)
-  3. **Bidirectional Resolution Algorithm**:
-     - Step A: If the input matches a Customer ID format (`LAK-CUST-...` or alphanumeric code), check direct ID / Code match.
-     - Step B: Extract `raw` number from input. If valid (e.g. 10 digits):
-       - Check if any customer's `phone` or `secondaryPhone` directly equals `raw`.
-       - Check if any customer's phone matches candidate prefixes: `+91${raw}`, `+91 ${raw}`, `91${raw}`, `0${raw}`.
-       - Check normalized customer phone: extract raw digits of all stored customer phone numbers and match where `extractRawPhone(customer.phone) === raw`.
-       - If no direct match in memory, execute Firestore queries against `phone` using `in` filter with `[raw, '+91' + raw, '+91 ' + raw, '91' + raw, '0' + raw]`.
-     - Step C: Fallback to searching Customer Code field or PIN.
-- Integrate seamlessly into `CustomerPortal.tsx` so users can type their phone number in ANY format (`9876543210`, `+91 9876543210`, `09876543210`) or their Customer ID into the exact same login field.
+## 3. Key Product Decisions & Trade-Offs
+
+- **Decision 1: Master Lookup Cross-Referencing**
+  - *Chosen Approach*: Build a temporary Master index (`masterLedgersMap`, `masterStockItemsMap`) during XML parsing, then enrich every voucher transaction line item with HSN Code, GSTIN, and Parent Group during the second pass.
+  - *Why*: Tally XML Vouchers often omit HSN codes or GSTINs on individual lines, relying on Master definitions. Pre-indexing guarantees 100% complete transaction records.
+- **Decision 2: Date Conversion & Multi-Field Sorting**
+  - *Chosen Approach*: Parse YYYYMMDD via `new Date(year, month - 1, day).getTime()`. Sort array via `.sort((a, b) => a.dateObj - b.dateObj || a.voucherNumber.localeCompare(b.voucherNumber))`.
 
 ---
 
-### Component 4: Real-Time Updates & In-App Notification Center
-#### Files: `src/types/index.ts`, `src/context/AppContext.tsx`, `src/components/customer/CustomerNotificationsModal.tsx`, `src/components/customer/CustomerPortal.tsx`, `src/utils/notificationService.ts`
-- **In-App Notification Center**:
-  - Add an Updates / Notifications bell button in the Customer Portal header with an unread badge counter.
-  - Clicking opens the **Updates & Notifications Log**:
-    - Categorized updates:
-      - 📄 **Invoice Added / Modified**: *"Invoice #LAK-INV-102 created for ₹42,500. Balance due: ₹0"*
-      - 🚚 **Order & Delivery Updates**: *"Your Daikin 1.5T AC order is Out for Delivery with driver Rajesh (+91 98765...)"*
-      - 📝 **Quotation Ready**: *"A new quotation #LAK-QUO-88 was generated for your inquiry"*
-      - 💳 **Payment Received**: *"Payment of ₹15,000 received via UPI for Invoice #LAK-INV-102"*
-    - Highlight unread notifications with distinct styling (e.g. pulse indicator, subtle colored background).
-    - "Mark All as Read" and per-item read status stored in `localStorage` (`lakhi_read_notifications`).
-- **Browser Push Notification Suggestion**:
-  - Banner in the customer portal: *"Turn on notifications to get instant updates on order dispatch, invoice copies, and service status"*.
-  - Clicking "Turn on Notifications" requests browser permission via `Notification.requestPermission()`.
-  - When permitted, trigger a native browser `Notification` whenever a new shipment status update, invoice, or quote arrives for the customer.
+## 4. Technical Architecture & Data Strategy
 
----
+### System Architecture & Data Flow
 
-### Component 5: Customer AI Copilot
-#### Files: `server.ts`, `src/components/customer/CustomerAiAssistantModal.tsx`, `src/components/customer/CustomerPortal.tsx`
-- Create `/api/ai/customer-chat` endpoint in `server.ts` powered by `gemini-3.8-flash`.
-- Provide contextual data restricted to the authenticated customer:
-  - Active customer profile, name, phone, address.
-  - List of invoices, payment balances, outstanding dues.
-  - Shipments, delivery stages, driver names, tracking notes.
-  - Warranties and serial numbers of purchased units.
-  - Store support hotline (+91 99980 21446) and operating hours.
-- Customer AI UI:
-  - Accessible via a floating "Ask Lakhi AI" button in CustomerPortal.
-  - Suggested quick prompts: *"Where is my order right now?"*, *"What is my pending balance?"*, *"Show my AC warranty details"*, *"Send me a copy of my latest invoice"*.
-  - Conversational, polite, and accurate customer support in English/Hindi.
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                   Unified Tally XML Payload Input                           │
+│     (<ENVELOPE> -> <REPORTNAME>Masters & Transactions</REPORTNAME>)          │
+└──────────────────────────────────────┬──────────────────────────────────────┘
+                                       │
+                                       ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         parseTallyXmlData() Engine                          │
+│  Pass 1: Build Masters Maps                                                 │
+│    - unitsMap: { SET: { isSimpleUnit: true } }                              │
+│    - godownsMap: { "Central Warehouse": { name: "Central Warehouse" } }     │
+│    - stockItemsMap: { "1.5 Ton Split AC 5 Star": { hsnCode: "84151010" } }  │
+│    - ledgersMap: { "Metro Cooling Center": { gstin: "24AJUPS3679Q1ZW" } }   │
+│                                                                             │
+│  Pass 2: Parse Vouchers & Extract Dual Serials                              │
+│    - BATCHNAME -> extractDualSerials() -> idu_serial, odu_serial            │
+│    - ALLLEDGERENTRIES -> Party Debit, CGST, SGST, IGST (Zero-sum check)     │
+│    - Enrich Vouchers with GSTIN & HSNCode from Pass 1 Maps                  │
+│                                                                             │
+│  Pass 3: Chronological Sorting                                              │
+│    - Date(YYYYMMDD) -> sort by dateAsc, then voucherNumberAsc               │
+└──────────────────────────────────────┬──────────────────────────────────────┘
+                                       │
+                                       ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                      TallyPrimeManager React Component                      │
+│  - "Load Masters & Transactions Sample XML" 1-Click Button                  │
+│  - Master Summary Pills & Enriched Transaction Table                        │
+│  - Live Firestore Database Sync (Customers, Inventory, Invoices, Shipments) │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
 
----
+### Data Model Additions in `tallyHelper.ts`
 
-### Component 6: Store AI Universal Copilot
-#### Files: `server.ts`, `src/components/common/AiAssistantDrawer.tsx`
-- Expand `/api/ai/chat` tools/actions to support **any** task that can be done on the website:
-  1. `EDIT_INVOICE`: Change discount (e.g., change discount from 500 to 1000), update line items, tax, payment status, or notes.
-  2. `DELETE_INVOICE`: Delete an invoice (requires confirmation card!).
-  3. `CREATE_INVOICE`: Create an invoice with items, discounts, customer details, and stock deduction.
-  4. `CREATE_QUOTATION` & `EDIT_QUOTATION`: Create or edit quotations.
-  5. `DELETE_QUOTATION`: Delete quotation (with confirmation card!).
-  6. `ADD_STOCK` & `DELETE_STOCK`: Add single or batch stock, or delete/mark sold.
-  7. `UPDATE_SHIPMENT`: Change delivery stage (e.g. "Mark Mr. Div shipment as Arrived at Store"), assign driver, add tracking notes.
-  8. `RECORD_PAYMENT`: Record a payment against an invoice or customer dues.
-  9. `LOGIN_CUSTOMER`: Look up and switch/login to a customer account directly via ID or PIN.
-  10. `NAVIGATE_TAB`: Switch tabs immediately.
-- Confirmation Card UI:
-  - For destructive/irreversible actions (`DELETE_INVOICE`, `EDIT_INVOICE`, `DELETE_STOCK`), show an interactive card in the chat: *"Warning: This will change invoice discount to ₹1,000. Confirm execution?"* with **[Confirm]** and **[Cancel]** buttons.
+```typescript
+export interface ParsedTallyUnit {
+  name: string;
+  isSimpleUnit?: boolean;
+}
 
----
+export interface ParsedTallyGodown {
+  name: string;
+}
 
-### Component 7: Console Errors & Build Verification
-#### Files: `src/App.tsx`, `src/components/*`
-- Audit and fix console warnings/errors (e.g., missing canvas fallback, unhandled promise rejections, date formatting warnings).
-- Run `lint_applet` and `compile_applet`.
+export interface ParsedTallyMasterSummary {
+  units: ParsedTallyUnit[];
+  godowns: ParsedTallyGodown[];
+  stockItems: ParsedTallyStockItem[];
+  ledgers: ParsedTallyCustomer[];
+}
 
----
+export interface ParsedTallyVoucher {
+  voucherNumber: string;
+  dateStr: string; // YYYYMMDD
+  dateFormatted: string; // YYYY-MM-DD
+  dateObj: Date;
+  vchType: 'SALES' | 'DELIVERY_NOTE' | 'OTHER';
+  partyLedgerName: string;
+  partyGstin?: string;
+  gstRegistrationType?: string;
+  totalAmount: number;
+  taxableAmount?: number;
+  cgstAmount?: number;
+  sgstAmount?: number;
+  igstAmount?: number;
+  items: Array<{
+    name: string;
+    hsnCode?: string;
+    quantity: number;
+    unit?: string;
+    rate?: number;
+    amount?: number;
+    godownName?: string;
+    batchName?: string;
+    idu_serial?: string;
+    odu_serial?: string;
+  }>;
+}
+```
 
-## 3. Verification Plan
-
-### Automated Verification
-- Run `lint_applet` (TypeScript checks) to verify no compilation errors.
-- Run `compile_applet` (Vite build) to ensure complete production bundle compilation.
-
-### Manual Verification Walkthrough
-1. **Brand Logos**:
-   - Open Settings > Brand & Logos. Upload or select a 1x1 app logo, main logo, and logo with "Lakhi". Verify immediate update across Header, Customer Portal, and favicon.
-2. **PWA vs Website Session**:
-   - Log into Customer Portal in standard browser tab. Refresh page: confirm session behavior matches web rules.
-   - Test in standalone mode: verify session is saved indefinitely.
-3. **72-Hour Claim Refresh**:
-   - Generate a 72-hour claim. Refresh the page: verify the active claim code, timer, and pending approval state remain intact.
-4. **Smart Code & Bidirectional Phone Matcher (`+91...` & Raw Resolver)**:
-   - Test with:
-     - Raw digits: `9876543210`
-     - With `+91`: `+919876543210` and `+91 9876543210`
-     - With `0`: `09876543210`
-     - With `91`: `919876543210`
-     - Stored customer in database with `+91` prefix when user enters raw digits, and vice versa.
-     - Direct Customer ID: `LAK-CUST-101`.
-   - Verify all variants resolve the correct customer instantly.
-5. **Notification Center & Push**:
-   - Check notification bell in Customer Portal; view invoice and shipment status logs; toggle notification permission; mark unread items as read.
-6. **Customer AI**:
-   - Ask: *"Where is my order?"* and *"What is my invoice amount?"*; verify accurate responses based on customer data.
-7. **Store AI Universal Automation**:
-   - Command: *"Change discount on invoice LAK-INV-101 to 1000"* -> verify confirmation prompt and successful execution.
-   - Command: *"Mark shipment for Div as arrived at store"* -> verify status update.
+### Implementation Plan Steps
+1. **Update `src/utils/tallyHelper.ts`**:
+   - Add parsing for `<UNIT>` and `<GODOWN>` tags.
+   - Update `parseTallyXmlData` to run two passes:
+     - Pass 1: Parse and store Master Ledgers and Stock Items in lookup maps.
+     - Pass 2: Parse Vouchers, extract `idu_serial` & `odu_serial` from `<BATCHNAME>`, verify zero-sum ledger entries, and enrich with Pass 1 Master metadata.
+     - Pass 3: Convert `<DATE>YYYYMMDD</DATE>` to standard JS Date and sort chronologically ascending by Date, then Voucher Number.
+   - Add `SAMPLE_TALLY_MASTERS_AND_TRANSACTIONS_XML` constant containing the exact sample payload provided.
+2. **Update `src/components/staff/TallyPrimeManager.tsx`**:
+   - Add a 1-click test button **"Load Masters & Transactions Sample XML"**.
+   - Render Master Summary cards (Units, Godowns, Stock Items, Ledgers).
+   - Render the chronologically sorted Transaction Register with enriched GSTIN and HSN badges, dual serial pills (`IDU: ...`, `ODU: ...`), and zero-sum tax breakdowns.
+3. **Compile & Verify**:
+   - Run `compile_applet` and `lint_applet` to verify compilation.

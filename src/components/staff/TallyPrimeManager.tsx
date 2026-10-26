@@ -34,8 +34,14 @@ import {
   Eye,
   EyeOff,
   Terminal,
+  Building2,
+  Link2,
+  PackageCheck,
+  SlidersHorizontal,
+  Zap,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
+import { Customer } from '../../types';
 import {
   parseTallyXmlData,
   parseTallyCsvData,
@@ -51,16 +57,21 @@ import {
   generateFullErpBackupJson,
   SAMPLE_TALLY_CUSTOMERS_XML,
   SAMPLE_TALLY_INVENTORY_XML,
+  SAMPLE_TALLY_MASTERS_AND_TRANSACTIONS_XML,
+  SAMPLE_TALLY_ALL_MASTERS_XML,
   ParsedTallyCustomer,
   ParsedTallyStockItem,
   ParsedTallyInvoice,
+  ParsedTallyMasterSummary,
   TallyParseStats,
 } from '../../utils/tallyHelper';
 
 export type TallyCategory =
   | 'CUSTOMERS'
+  | 'DEALERS'
   | 'INVENTORY'
   | 'INVOICES'
+  | 'DELIVERY_NOTES'
   | 'QUOTATIONS'
   | 'SHIPMENTS'
   | 'KHATA'
@@ -68,8 +79,10 @@ export type TallyCategory =
 
 export type GuideCategory =
   | 'CUSTOMERS'
+  | 'DEALERS'
   | 'INVENTORY'
   | 'INVOICES'
+  | 'DELIVERY_NOTES'
   | 'QUOTATIONS'
   | 'SHIPMENTS'
   | 'KHATA'
@@ -92,8 +105,11 @@ export const TallyPrimeManager: React.FC<TallyPrimeManagerProps> = ({
     quotations,
     shipments,
     addCustomer,
+    updateCustomer,
     addInventoryItem,
     addInvoice,
+    createAnyDocument,
+    updateAnyDocument,
     gstNumber,
   } = useApp();
 
@@ -102,6 +118,9 @@ export const TallyPrimeManager: React.FC<TallyPrimeManagerProps> = ({
 
   // Category filter
   const [selectedCategory, setSelectedCategory] = useState<TallyCategory>(initialCategory);
+
+  // Import Mode Strategy: 'MERGE' (Auto-Detect & Merge) vs 'REPLACE' (Overwrite Existing Data)
+  const [importStrategy, setImportStrategy] = useState<'MERGE' | 'REPLACE'>('MERGE');
 
   // Sync when initialTab or initialCategory change
   useEffect(() => {
@@ -129,9 +148,14 @@ export const TallyPrimeManager: React.FC<TallyPrimeManagerProps> = ({
   const [parseWarnings, setParseWarnings] = useState<string[]>([]);
   const [rawSampleLines, setRawSampleLines] = useState<string[]>([]);
   const [forcedDelimiter, setForcedDelimiter] = useState<string>('auto');
+
+  const [parsedMasterSummary, setParsedMasterSummary] = useState<ParsedTallyMasterSummary | null>(null);
   const [parsedCustomers, setParsedCustomers] = useState<ParsedTallyCustomer[]>([]);
+  const [parsedDealers, setParsedDealers] = useState<ParsedTallyCustomer[]>([]);
   const [parsedStock, setParsedStock] = useState<ParsedTallyStockItem[]>([]);
   const [parsedInvoices, setParsedInvoices] = useState<ParsedTallyInvoice[]>([]);
+  const [parsedDeliveryNotes, setParsedDeliveryNotes] = useState<ParsedTallyInvoice[]>([]);
+
   const [selectedItemIndices, setSelectedItemIndices] = useState<number[]>([]);
   const [isImporting, setIsImporting] = useState(false);
   const [importSuccessMessage, setImportSuccessMessage] = useState<string | null>(null);
@@ -160,10 +184,13 @@ export const TallyPrimeManager: React.FC<TallyPrimeManagerProps> = ({
     const isXml = filename.toLowerCase().endsWith('.xml') || text.trim().startsWith('<');
 
     if (isXml) {
-      const parsed = parseTallyXmlData(text);
+      const parsed = parseTallyXmlData(text, customers);
+      setParsedMasterSummary(parsed.masters);
       setParsedCustomers(parsed.customers);
+      setParsedDealers(parsed.dealers);
       setParsedStock(parsed.stockItems);
       setParsedInvoices(parsed.invoices);
+      setParsedDeliveryNotes(parsed.deliveryNotes);
       setParseStats(parsed.stats);
       setParseWarnings(parsed.warnings);
       setRawSampleLines(parsed.rawSampleLines);
@@ -172,19 +199,20 @@ export const TallyPrimeManager: React.FC<TallyPrimeManagerProps> = ({
       if (parsed.customers.length > 0 && selectedCategory !== 'CUSTOMERS') {
         setSelectedCategory('CUSTOMERS');
         setSelectedItemIndices(parsed.customers.map((_, i) => i));
+      } else if (parsed.dealers.length > 0 && selectedCategory !== 'DEALERS') {
+        setSelectedCategory('DEALERS');
+        setSelectedItemIndices(parsed.dealers.map((_, i) => i));
       } else if (parsed.stockItems.length > 0 && selectedCategory !== 'INVENTORY') {
         setSelectedCategory('INVENTORY');
         setSelectedItemIndices(parsed.stockItems.map((_, i) => i));
       } else if (parsed.invoices.length > 0 && selectedCategory !== 'INVOICES') {
         setSelectedCategory('INVOICES');
         setSelectedItemIndices(parsed.invoices.map((_, i) => i));
+      } else if (parsed.deliveryNotes.length > 0 && selectedCategory !== 'DELIVERY_NOTES') {
+        setSelectedCategory('DELIVERY_NOTES');
+        setSelectedItemIndices(parsed.deliveryNotes.map((_, i) => i));
       } else {
-        const count =
-          selectedCategory === 'CUSTOMERS'
-            ? parsed.customers.length
-            : selectedCategory === 'INVENTORY'
-            ? parsed.stockItems.length
-            : parsed.invoices.length;
+        const count = getActiveCategoryCount(selectedCategory, parsed);
         setSelectedItemIndices(Array.from({ length: count }, (_, i) => i));
       }
 
@@ -197,23 +225,20 @@ export const TallyPrimeManager: React.FC<TallyPrimeManagerProps> = ({
       // CSV / TSV format
       const effDelim = delimiterOverride && delimiterOverride !== 'auto' ? delimiterOverride : undefined;
       const csvCategory =
-        selectedCategory === 'INVENTORY' || selectedCategory === 'INVOICES'
+        selectedCategory === 'INVENTORY' || selectedCategory === 'INVOICES' || selectedCategory === 'DELIVERY_NOTES' || selectedCategory === 'DEALERS'
           ? selectedCategory
           : 'CUSTOMERS';
-      const parsed = parseTallyCsvData(text, csvCategory, effDelim);
+      const parsed = parseTallyCsvData(text, csvCategory, effDelim, customers);
       setParsedCustomers(parsed.customers);
+      setParsedDealers(parsed.dealers);
       setParsedStock(parsed.stockItems);
       setParsedInvoices(parsed.invoices);
+      setParsedDeliveryNotes(parsed.deliveryNotes);
       setParseStats(parsed.stats);
       setParseWarnings(parsed.warnings);
       setRawSampleLines(parsed.rawSampleLines);
 
-      const count =
-        selectedCategory === 'CUSTOMERS'
-          ? parsed.customers.length
-          : selectedCategory === 'INVENTORY'
-          ? parsed.stockItems.length
-          : parsed.invoices.length;
+      const count = getActiveCategoryCount(selectedCategory, parsed);
       setSelectedItemIndices(Array.from({ length: count }, (_, i) => i));
 
       if (parsed.stats.totalFound === 0) {
@@ -221,6 +246,29 @@ export const TallyPrimeManager: React.FC<TallyPrimeManagerProps> = ({
           `File loaded (${(parsed.stats.fileSizeBytes / 1024).toFixed(1)} KB), but 0 records were parsed. Try switching delimiter or category below.`
         );
       }
+    }
+  };
+
+  const getActiveCategoryCount = (cat: TallyCategory, parsed?: any) => {
+    const custs = parsed ? parsed.customers : parsedCustomers;
+    const dlrs = parsed ? parsed.dealers : parsedDealers;
+    const stck = parsed ? parsed.stockItems : parsedStock;
+    const invs = parsed ? parsed.invoices : parsedInvoices;
+    const deliv = parsed ? parsed.deliveryNotes : parsedDeliveryNotes;
+
+    switch (cat) {
+      case 'CUSTOMERS':
+        return custs.length;
+      case 'DEALERS':
+        return dlrs.length;
+      case 'INVENTORY':
+        return stck.length;
+      case 'INVOICES':
+        return invs.length;
+      case 'DELIVERY_NOTES':
+        return deliv.length;
+      default:
+        return 0;
     }
   };
 
@@ -272,22 +320,23 @@ export const TallyPrimeManager: React.FC<TallyPrimeManagerProps> = ({
   };
 
   // Load sample data for immediate test drive
-  const handleLoadSample = (cat: TallyCategory) => {
-    setSelectedCategory(cat);
-    if (cat === 'CUSTOMERS') {
+  const handleLoadSample = (cat: TallyCategory | 'ALL' | 'ALL_MASTERS') => {
+    if (cat === 'ALL_MASTERS') {
+      setSelectedCategory('CUSTOMERS');
+      processRawFileText(SAMPLE_TALLY_ALL_MASTERS_XML, 'sample_tally_all_masters.xml');
+    } else if (cat === 'ALL') {
+      processRawFileText(SAMPLE_TALLY_MASTERS_AND_TRANSACTIONS_XML, 'sample_tally_masters_and_transactions.xml');
+    } else if (cat === 'CUSTOMERS' || cat === 'DEALERS') {
+      setSelectedCategory('CUSTOMERS');
       processRawFileText(SAMPLE_TALLY_CUSTOMERS_XML, 'sample_tally_customers.xml');
     } else if (cat === 'INVENTORY') {
+      setSelectedCategory('INVENTORY');
       processRawFileText(SAMPLE_TALLY_INVENTORY_XML, 'sample_tally_inventory.xml');
     }
   };
 
   // Select / deselect all
-  const activeParsedCount =
-    selectedCategory === 'CUSTOMERS'
-      ? parsedCustomers.length
-      : selectedCategory === 'INVENTORY'
-      ? parsedStock.length
-      : parsedInvoices.length;
+  const activeParsedCount = getActiveCategoryCount(selectedCategory);
 
   const handleToggleSelectAll = () => {
     if (selectedItemIndices.length === activeParsedCount) {
@@ -305,7 +354,7 @@ export const TallyPrimeManager: React.FC<TallyPrimeManagerProps> = ({
     }
   };
 
-  // Execute Import to Firestore Database
+  // Execute Smart Import to Firestore Database
   const handleExecuteImport = async () => {
     if (selectedItemIndices.length === 0) {
       setImportErrorMessage('Please select at least one record to import.');
@@ -318,90 +367,294 @@ export const TallyPrimeManager: React.FC<TallyPrimeManagerProps> = ({
 
     try {
       let importedCount = 0;
+      let mergedCount = 0;
+      let replacedCount = 0;
 
+      // 1. CUSTOMERS (Sundry Debtors)
       if (selectedCategory === 'CUSTOMERS') {
         for (const idx of selectedItemIndices) {
           const item = parsedCustomers[idx];
           if (!item) continue;
-          await addCustomer({
-            externalName: item.externalName,
-            phone: item.phone,
-            email: item.email,
-            billingAddress: item.billingAddress,
-            installationAddress: item.installationAddress || item.billingAddress,
-            gstin: item.gstin,
-            accountBalance: item.accountBalance || 0,
-            notes: item.notes || 'Imported from Tally Prime',
-          });
-          importedCount++;
+
+          if (item.existingMatchId) {
+            if (importStrategy === 'MERGE') {
+              const mergePayload: Partial<Customer> = {
+                notes: `Tally Merged (${new Date().toLocaleDateString()}): ${item.notes || ''}`,
+              };
+              if (item.phone) mergePayload.phone = item.phone;
+              if (item.email) mergePayload.email = item.email;
+              if (item.billingAddress) mergePayload.billingAddress = item.billingAddress;
+              if (item.gstin) mergePayload.gstin = item.gstin;
+              if (item.accountBalance !== undefined) mergePayload.accountBalance = item.accountBalance;
+
+              await updateCustomer(item.existingMatchId, mergePayload);
+              mergedCount++;
+            } else {
+              // REPLACE
+              await updateCustomer(item.existingMatchId, {
+                externalName: item.externalName || 'Customer',
+                phone: item.phone || '',
+                email: item.email || '',
+                billingAddress: item.billingAddress || '',
+                installationAddress: item.installationAddress || item.billingAddress || '',
+                gstin: item.gstin || '',
+                accountBalance: item.accountBalance || 0,
+                notes: `Replaced from Tally Prime Export (${new Date().toLocaleDateString()})`,
+              });
+              replacedCount++;
+            }
+          } else {
+            await addCustomer({
+              externalName: item.externalName || 'Customer',
+              phone: item.phone || '',
+              email: item.email || '',
+              billingAddress: item.billingAddress || '',
+              installationAddress: item.installationAddress || item.billingAddress || '',
+              gstin: item.gstin || '',
+              accountBalance: item.accountBalance || 0,
+              notes: item.notes || 'Imported from Tally Prime',
+            });
+            importedCount++;
+          }
         }
-      } else if (selectedCategory === 'INVENTORY') {
+      }
+      // 2. DEALERS / SUPPLIERS (Sundry Creditors)
+      else if (selectedCategory === 'DEALERS') {
+        for (const idx of selectedItemIndices) {
+          const item = parsedDealers[idx];
+          if (!item) continue;
+
+          if (item.existingMatchId) {
+            if (importStrategy === 'MERGE') {
+              const mergePayload: Partial<Customer> = {
+                notes: `Dealer Supplier Merged (${new Date().toLocaleDateString()}): ${item.notes || ''}`,
+              };
+              if (item.phone) mergePayload.phone = item.phone;
+              if (item.email) mergePayload.email = item.email;
+              if (item.billingAddress) mergePayload.billingAddress = item.billingAddress;
+              if (item.gstin) mergePayload.gstin = item.gstin;
+              if (item.accountBalance !== undefined) mergePayload.accountBalance = -Math.abs(item.accountBalance);
+
+              await updateCustomer(item.existingMatchId, mergePayload);
+              mergedCount++;
+            } else {
+              await updateCustomer(item.existingMatchId, {
+                externalName: item.externalName || 'Dealer Supplier',
+                phone: item.phone || '',
+                email: item.email || '',
+                billingAddress: item.billingAddress || '',
+                gstin: item.gstin || '',
+                accountBalance: item.accountBalance ? -Math.abs(item.accountBalance) : 0,
+                notes: `Dealer Supplier Replaced from Tally (${new Date().toLocaleDateString()})`,
+              });
+              replacedCount++;
+            }
+          } else {
+            await addCustomer({
+              externalName: item.externalName || 'Dealer Supplier',
+              internalName: `Dealer / Supplier (${item.tallyParent || 'Sundry Creditors'})`,
+              phone: item.phone || '',
+              email: item.email || '',
+              billingAddress: item.billingAddress || '',
+              installationAddress: item.billingAddress || '',
+              gstin: item.gstin || '',
+              accountBalance: item.accountBalance ? -Math.abs(item.accountBalance) : 0,
+              notes: item.notes || 'Imported from Tally Prime Sundry Creditors',
+            });
+            importedCount++;
+          }
+        }
+      }
+      // 3. INVENTORY & AC STOCK
+      else if (selectedCategory === 'INVENTORY') {
         for (const idx of selectedItemIndices) {
           const item = parsedStock[idx];
           if (!item) continue;
-          await addInventoryItem({
-            name: item.name,
-            modelNo: item.modelNo || 'FTKF50TV',
-            indoorModelNo: item.indoorModelNo,
-            outdoorModelNo: item.outdoorModelNo,
-            type: item.type || 'AC',
-            brand: item.brand || 'Daikin',
-            serialNo: item.serialNo || `TALLY-${Date.now().toString().slice(-4)}${importedCount + 1}`,
-            sellingPrice: item.sellingPrice || 45000,
-          });
-          importedCount++;
+
+          const existingMatch = inventory.find(
+            (inv) =>
+              (item.serialNo && inv.serialNo === item.serialNo) ||
+              (item.indoorUnitSerial && inv.indoorUnitSerial === item.indoorUnitSerial) ||
+              (inv.modelNo && inv.modelNo.toLowerCase() === item.modelNo.toLowerCase() && inv.status === 'AVAILABLE')
+          );
+
+          if (existingMatch) {
+            if (importStrategy === 'MERGE') {
+              await updateAnyDocument('inventory', existingMatch.id, {
+                sellingPrice: item.sellingPrice || existingMatch.sellingPrice,
+                indoorUnitSerial: item.indoorUnitSerial || existingMatch.indoorUnitSerial,
+                outdoorUnitSerial: item.outdoorUnitSerial || existingMatch.outdoorUnitSerial,
+                updatedAt: new Date().toISOString(),
+              });
+              mergedCount++;
+            } else {
+              await updateAnyDocument('inventory', existingMatch.id, {
+                name: item.name,
+                modelNo: item.modelNo,
+                indoorModelNo: item.indoorModelNo,
+                outdoorModelNo: item.outdoorModelNo,
+                sellingPrice: item.sellingPrice,
+                indoorUnitSerial: item.indoorUnitSerial,
+                outdoorUnitSerial: item.outdoorUnitSerial,
+                updatedAt: new Date().toISOString(),
+              });
+              replacedCount++;
+            }
+          } else {
+            await addInventoryItem({
+              name: item.name,
+              modelNo: item.modelNo || 'FTKF50TV',
+              indoorModelNo: item.indoorModelNo,
+              outdoorModelNo: item.outdoorModelNo,
+              type: item.type || 'AC',
+              brand: item.brand || 'Daikin',
+              serialNo: item.serialNo || `TALLY-${Date.now().toString().slice(-4)}${importedCount + 1}`,
+              indoorUnitSerial: item.indoorUnitSerial,
+              outdoorUnitSerial: item.outdoorUnitSerial,
+              sellingPrice: item.sellingPrice || 45000,
+            });
+            importedCount++;
+          }
         }
-      } else if (selectedCategory === 'INVOICES') {
+      }
+      // 4. SALES INVOICES
+      else if (selectedCategory === 'INVOICES') {
         for (const idx of selectedItemIndices) {
           const item = parsedInvoices[idx];
           if (!item) continue;
-          const subtotal = item.totalAmount / 1.18;
-          const taxAmount = item.totalAmount - subtotal;
 
-          await addInvoice({
-            customerId: '',
-            customerExternalName: item.customerName,
-            customerPhone: item.customerPhone || 'Not specified',
-            billingAddress: item.billingAddress || 'Store Pickup',
-            installationAddress: item.billingAddress || 'Store Pickup',
-            items: item.items.map((it, itIdx) => ({
-              id: `inv-it-${Date.now()}-${itIdx}`,
-              name: it.name,
-              modelNo: it.modelNo || 'STANDARD',
-              type: 'AC',
-              brand: 'Daikin',
-              quantity: it.quantity,
-              rate: it.rate,
-              taxPercent: 18,
-              isAmountWithTax: true,
-              discount: 0,
-              lineTotal: it.amount,
-            })),
-            subtotal,
-            taxAmount,
-            discountAmount: 0,
-            totalAmount: item.totalAmount,
-            prepaidSplits: {
-              fromBalance: 0,
-              upi: { amount: 0, receivingBank: '', utr: '' },
-              card: { amount: 0, receivingBank: '', authId: '' },
-              chequeOrNeft: { amount: 0, chequeOrSlipOrUtr: '', bank: '' },
-              cash: { amount: 0, drawerRegister: '' },
+          // Customer Auto-Linking: resolve customer ID or create new customer
+          let effectiveCustId = item.matchedCustomerId;
+          if (!effectiveCustId) {
+            effectiveCustId = await addCustomer({
+              externalName: item.customerName,
+              phone: item.customerPhone || '9800000000',
+              billingAddress: item.billingAddress || 'Store Pickup',
+              installationAddress: item.billingAddress || 'Store Pickup',
+              gstin: item.gstin,
+              accountBalance: 0,
+              notes: `Auto-linked from Tally Invoice #${item.invoiceNumber}`,
+            });
+          }
+
+          const existingInv = invoices.find((inv) => inv.id === item.invoiceNumber || inv.notes?.includes(item.invoiceNumber));
+
+          const subtotal = item.taxableAmount || item.totalAmount / 1.18;
+          const taxAmount = item.cgstAmount && item.sgstAmount ? item.cgstAmount + item.sgstAmount + (item.igstAmount || 0) : item.totalAmount - subtotal;
+
+          if (existingInv && importStrategy === 'REPLACE') {
+            await updateAnyDocument('invoices', existingInv.id, {
+              customerId: effectiveCustId,
+              customerExternalName: item.customerName,
+              totalAmount: item.totalAmount,
+              subtotal,
+              taxAmount,
+              amountDue: item.totalAmount,
+              updatedAt: new Date().toISOString(),
+            });
+            replacedCount++;
+          } else {
+            await addInvoice(
+              {
+                customerId: effectiveCustId,
+                customerExternalName: item.customerName,
+                customerPhone: item.customerPhone || 'Not specified',
+                billingAddress: item.billingAddress || 'Store Pickup',
+                installationAddress: item.billingAddress || 'Store Pickup',
+                items: item.items.map((it, itIdx) => ({
+                  id: `inv-it-${Date.now()}-${itIdx}`,
+                  name: it.name,
+                  modelNo: it.modelNo || 'STANDARD',
+                  indoorModelNo: it.indoorModelNo,
+                  outdoorModelNo: it.outdoorModelNo,
+                  indoorUnitSerial: it.indoorUnitSerial,
+                  outdoorUnitSerial: it.outdoorUnitSerial,
+                  serialNo: it.serialNo,
+                  type: 'AC',
+                  brand: 'Daikin',
+                  quantity: it.quantity,
+                  rate: it.rate,
+                  taxPercent: 18,
+                  isAmountWithTax: true,
+                  discount: 0,
+                  lineTotal: it.amount,
+                })),
+                subtotal,
+                taxAmount,
+                discountAmount: 0,
+                totalAmount: item.totalAmount,
+                prepaidSplits: {
+                  fromBalance: 0,
+                  upi: { amount: 0, receivingBank: '', utr: '' },
+                  card: { amount: 0, receivingBank: '', authId: '' },
+                  chequeOrNeft: { amount: 0, chequeOrSlipOrUtr: '', bank: '' },
+                  cash: { amount: 0, drawerRegister: '' },
+                },
+                totalPrepaid: 0,
+                amountDue: item.totalAmount,
+                paymentStatus: 'UNPAID',
+                gstNumber,
+                notes: item.narration || `Imported from Tally Prime Voucher #${item.invoiceNumber}`,
+              },
+              item.invoiceNumber
+            );
+            importedCount++;
+          }
+        }
+      }
+      // 5. DELIVERY NOTES (Pending Shipments)
+      else if (selectedCategory === 'DELIVERY_NOTES') {
+        for (const idx of selectedItemIndices) {
+          const item = parsedDeliveryNotes[idx];
+          if (!item) continue;
+
+          let effectiveCustId = item.matchedCustomerId;
+          if (!effectiveCustId) {
+            effectiveCustId = await addCustomer({
+              externalName: item.customerName,
+              phone: item.customerPhone || '9800000000',
+              billingAddress: item.billingAddress || 'Delivery Address',
+              installationAddress: item.billingAddress || 'Delivery Address',
+              gstin: item.gstin,
+              accountBalance: 0,
+              notes: `Auto-linked from Tally Delivery Note #${item.invoiceNumber}`,
+            });
+          }
+
+          const itemsSummary = item.items
+            .map((it) => `${it.name} (Qty: ${it.quantity}${it.indoorUnitSerial ? `, IDU: ${it.indoorUnitSerial}` : ''}${it.outdoorUnitSerial ? `, ODU: ${it.outdoorUnitSerial}` : ''})`)
+            .join(' | ');
+
+          await createAnyDocument(
+            'shipments',
+            {
+              customerId: effectiveCustId,
+              customerExternalName: item.customerName,
+              customerPhone: item.customerPhone || 'Not specified',
+              deliveryAddress: item.billingAddress || 'Delivery Location',
+              installationAddress: item.billingAddress || 'Delivery Location',
+              itemsSummary,
+              status: 'ORDER_PLACED',
+              outForDeliveryEnabled: false,
+              trackingUpdates: [
+                {
+                  id: `trk-${Date.now()}`,
+                  timestamp: new Date().toISOString(),
+                  message: `Imported from Tally Delivery Note Challan #${item.invoiceNumber}`,
+                },
+              ],
+              createdAt: new Date().toISOString(),
             },
-            totalPrepaid: 0,
-            amountDue: item.totalAmount,
-            paymentStatus: 'UNPAID',
-            gstNumber,
-            notes: item.narration || `Imported from Tally Prime Voucher #${item.invoiceNumber}`,
-          });
+            item.invoiceNumber
+          );
           importedCount++;
         }
       }
 
+      const modeMsg = importStrategy === 'MERGE' ? `Merged ${mergedCount}, Added ${importedCount}` : `Replaced ${replacedCount}, Added ${importedCount}`;
       setImportSuccessMessage(
-        `Successfully imported ${importedCount} ${selectedCategory.toLowerCase()} record(s) into the live database!`
+        `Success! Processed ${selectedItemIndices.length} ${selectedCategory.toLowerCase()} record(s). (${modeMsg})`
       );
-      // Clear selection after import
       setSelectedItemIndices([]);
     } catch (err: any) {
       console.error('Import error:', err);
@@ -411,84 +664,32 @@ export const TallyPrimeManager: React.FC<TallyPrimeManagerProps> = ({
     }
   };
 
-  // ==========================================
-  // EXPORT GENERATION HELPERS
-  // ==========================================
+  // Export helpers
   const getExportDataString = (): { content: string; filename: string; mime: string } => {
     const timestamp = new Date().toISOString().slice(0, 10);
 
     if (selectedCategory === 'CUSTOMERS') {
-      if (exportFormat === 'XML') {
-        return {
-          content: generateTallyCustomersXml(customers),
-          filename: `Tally_Customers_Master_${timestamp}.xml`,
-          mime: 'application/xml',
-        };
-      } else {
-        return {
-          content: generateCustomersCsv(customers),
-          filename: `Lakhi_Customers_${timestamp}.csv`,
-          mime: 'text/csv',
-        };
-      }
+      return exportFormat === 'XML'
+        ? { content: generateTallyCustomersXml(customers), filename: `Tally_Customers_Master_${timestamp}.xml`, mime: 'application/xml' }
+        : { content: generateCustomersCsv(customers), filename: `Lakhi_Customers_${timestamp}.csv`, mime: 'text/csv' };
     } else if (selectedCategory === 'INVENTORY') {
-      if (exportFormat === 'XML') {
-        return {
-          content: generateTallyInventoryXml(inventory),
-          filename: `Tally_StockItems_Master_${timestamp}.xml`,
-          mime: 'application/xml',
-        };
-      } else {
-        return {
-          content: generateInventoryCsv(inventory),
-          filename: `Lakhi_Inventory_${timestamp}.csv`,
-          mime: 'text/csv',
-        };
-      }
+      return exportFormat === 'XML'
+        ? { content: generateTallyInventoryXml(inventory), filename: `Tally_StockItems_Master_${timestamp}.xml`, mime: 'application/xml' }
+        : { content: generateInventoryCsv(inventory), filename: `Lakhi_Inventory_${timestamp}.csv`, mime: 'text/csv' };
     } else if (selectedCategory === 'INVOICES') {
-      if (exportFormat === 'XML') {
-        return {
-          content: generateTallyInvoicesXml(invoices),
-          filename: `Tally_SalesVouchers_${timestamp}.xml`,
-          mime: 'application/xml',
-        };
-      } else {
-        return {
-          content: generateInvoicesCsv(invoices),
-          filename: `Lakhi_Invoices_${timestamp}.csv`,
-          mime: 'text/csv',
-        };
-      }
+      return exportFormat === 'XML'
+        ? { content: generateTallyInvoicesXml(invoices), filename: `Tally_SalesVouchers_${timestamp}.xml`, mime: 'application/xml' }
+        : { content: generateInvoicesCsv(invoices), filename: `Lakhi_Invoices_${timestamp}.csv`, mime: 'text/csv' };
     } else if (selectedCategory === 'QUOTATIONS') {
-      return {
-        content: generateQuotationsCsv(quotations),
-        filename: `Lakhi_Quotations_Register_${timestamp}.csv`,
-        mime: 'text/csv',
-      };
+      return { content: generateQuotationsCsv(quotations), filename: `Lakhi_Quotations_${timestamp}.csv`, mime: 'text/csv' };
     } else if (selectedCategory === 'SHIPMENTS') {
-      return {
-        content: generateShipmentsCsv(shipments),
-        filename: `Lakhi_Shipments_Log_${timestamp}.csv`,
-        mime: 'text/csv',
-      };
+      return { content: generateShipmentsCsv(shipments), filename: `Lakhi_Shipments_${timestamp}.csv`, mime: 'text/csv' };
     } else if (selectedCategory === 'KHATA') {
-      return {
-        content: generateDuesKhataCsv(customers, invoices),
-        filename: `Lakhi_Dues_Khata_Report_${timestamp}.csv`,
-        mime: 'text/csv',
-      };
+      return { content: generateDuesKhataCsv(customers, invoices), filename: `Lakhi_Dues_Khata_${timestamp}.csv`, mime: 'text/csv' };
     } else {
-      // BACKUP
       return {
-        content: generateFullErpBackupJson({
-          customers,
-          inventory,
-          invoices,
-          quotations,
-          shipments,
-          gstNumber,
-        }),
-        filename: `Lakhi_ERP_Full_Backup_${timestamp}.json`,
+        content: generateFullErpBackupJson({ customers, inventory, invoices, quotations, shipments, gstNumber }),
+        filename: `Lakhi_ERP_Backup_${timestamp}.json`,
         mime: 'application/json',
       };
     }
@@ -516,7 +717,7 @@ export const TallyPrimeManager: React.FC<TallyPrimeManagerProps> = ({
 
   return (
     <div className="space-y-6 animate-in fade-in duration-200">
-      {/* Top Banner / Header */}
+      {/* Top Banner Header */}
       <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 border border-slate-200 dark:border-slate-800 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <div className="flex items-center gap-2.5">
@@ -529,11 +730,11 @@ export const TallyPrimeManager: React.FC<TallyPrimeManagerProps> = ({
                   Tally Prime Integration Hub
                 </h2>
                 <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300">
-                  XML &amp; Excel Compatible
+                  Dual Serials &amp; Auto-Link Ready
                 </span>
               </div>
               <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                Seamlessly import customer ledgers, AC inventory stock, and sales vouchers from Tally Prime into Lakhi ERP, or export Tally-ready XML files.
+                Import Ledgers, Dealers, Stock, Delivery Notes &amp; Sales Vouchers from Tally Prime into Lakhi ERP with automatic Customer ID linking and Merge/Replace options.
               </p>
             </div>
           </div>
@@ -572,16 +773,58 @@ export const TallyPrimeManager: React.FC<TallyPrimeManagerProps> = ({
             }`}
           >
             <BookOpen className="w-3.5 h-3.5" />
-            <span>📖 How to Export/Import</span>
+            <span>📖 Documentation</span>
           </button>
         </div>
       </div>
 
-      {/* =========================================================================
-          TAB 1: IMPORT FROM TALLY PRIME
-          ========================================================================= */}
+      {/* TAB 1: IMPORT FROM TALLY PRIME */}
       {activeTab === 'IMPORT' && (
         <div className="space-y-6">
+          {/* Strategy Bar: Merge vs Replace */}
+          <div className="bg-white dark:bg-slate-900 p-4 rounded-3xl border border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-xs">
+            <div className="flex items-center gap-3">
+              <span className="p-2 rounded-xl bg-blue-100 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300">
+                <SlidersHorizontal className="w-4 h-4" />
+              </span>
+              <div>
+                <span className="text-xs font-black text-slate-900 dark:text-white block">
+                  Import &amp; De-duplication Strategy
+                </span>
+                <span className="text-[11px] text-slate-500 dark:text-slate-400">
+                  Controls how matching records are handled during database sync
+                </span>
+              </div>
+            </div>
+
+            <div className="flex items-center bg-slate-100 dark:bg-slate-800 p-1 rounded-2xl border border-slate-200 dark:border-slate-700">
+              <button
+                type="button"
+                onClick={() => setImportStrategy('MERGE')}
+                className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                  importStrategy === 'MERGE'
+                    ? 'bg-emerald-600 text-white shadow-xs'
+                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
+                }`}
+              >
+                <Zap className="w-3.5 h-3.5" />
+                <span>Smart Merge (Auto-Detect)</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setImportStrategy('REPLACE')}
+                className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                  importStrategy === 'REPLACE'
+                    ? 'bg-amber-600 text-white shadow-xs'
+                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
+                }`}
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                <span>Replace / Overwrite Data</span>
+              </button>
+            </div>
+          </div>
+
           {/* Step 1: Select Category & Upload File */}
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             {/* Category Selector Card */}
@@ -590,31 +833,45 @@ export const TallyPrimeManager: React.FC<TallyPrimeManagerProps> = ({
                 <span className="w-5 h-5 rounded-full bg-red-600 text-white text-[10px] flex items-center justify-center font-bold">
                   1
                 </span>
-                Select Data to Import
+                Select Data Category
               </h3>
 
               <div className="space-y-2">
                 {[
                   {
                     id: 'CUSTOMERS' as const,
-                    title: 'Customer Ledgers',
+                    title: 'Customer Debtors',
                     desc: 'Sundry Debtors with Phone, Address, GSTIN, Opening Balance',
                     icon: Users,
-                    badge: `${customers.length} In System`,
+                    badge: `${customers.length} Accounts`,
+                  },
+                  {
+                    id: 'DEALERS' as const,
+                    title: 'Dealers / Suppliers',
+                    desc: 'Sundry Creditors & Wholesale Distributors',
+                    icon: Building2,
+                    badge: 'Creditors',
                   },
                   {
                     id: 'INVENTORY' as const,
-                    title: 'Stock Items & Appliances',
-                    desc: 'AC Models, Rates, IDU/ODU Model Numbers, Units',
+                    title: 'Stock & Dual Serials',
+                    desc: 'AC Models, Godowns, IDU & ODU Warranty Serials',
                     icon: Boxes,
-                    badge: `${inventory.length} In Stock`,
+                    badge: `${inventory.length} Units`,
                   },
                   {
                     id: 'INVOICES' as const,
-                    title: 'Sales Invoices / Vouchers',
-                    desc: 'Vouchers with Bill No, Party Name, Total, Items, Dates',
+                    title: 'Sales Invoices',
+                    desc: 'Vouchers with Customer ID Linking & GST Tax',
                     icon: Receipt,
-                    badge: `${invoices.length} Invoices`,
+                    badge: `${invoices.length} Bills`,
+                  },
+                  {
+                    id: 'DELIVERY_NOTES' as const,
+                    title: 'Delivery Notes (Challans)',
+                    desc: 'Pending Warehouse Dispatches & Delivery Shipments',
+                    icon: Truck,
+                    badge: `${shipments.length} Dispatches`,
                   },
                 ].map((cat) => {
                   const Icon = cat.icon;
@@ -628,7 +885,7 @@ export const TallyPrimeManager: React.FC<TallyPrimeManagerProps> = ({
                         setImportErrorMessage(null);
                         setImportSuccessMessage(null);
                       }}
-                      className={`w-full p-3.5 rounded-2xl border text-left transition-all flex items-start gap-3 ${
+                      className={`w-full p-3 rounded-2xl border text-left transition-all flex items-start gap-3 ${
                         isSelected
                           ? 'bg-red-50/60 dark:bg-red-950/40 border-red-500/80 ring-2 ring-red-500/20'
                           : 'bg-slate-50/50 dark:bg-slate-800/40 border-slate-200 dark:border-slate-800 hover:border-slate-300'
@@ -662,23 +919,41 @@ export const TallyPrimeManager: React.FC<TallyPrimeManagerProps> = ({
               </div>
 
               {/* Sample Test Data Quick Loader */}
-              <div className="pt-2 border-t border-slate-100 dark:border-slate-800">
-                <span className="text-[10px] font-bold text-slate-400 block mb-1.5 uppercase tracking-wider">
-                  Quick Testing / Samples
+              <div className="pt-2 border-t border-slate-100 dark:border-slate-800 space-y-2">
+                <span className="text-[10px] font-bold text-slate-400 block uppercase tracking-wider">
+                  Quick Testing Samples
                 </span>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => handleLoadSample('ALL_MASTERS')}
+                    className="py-2 px-2 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                  >
+                    <Sparkles className="w-3.5 h-3.5 text-emerald-500" />
+                    <span>Sample All Masters Payload</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleLoadSample('ALL')}
+                    className="py-2 px-2 bg-amber-500/10 hover:bg-amber-500/20 text-amber-700 dark:text-amber-300 border border-amber-500/30 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                  >
+                    <Sparkles className="w-3.5 h-3.5 text-amber-500" />
+                    <span>Sample Vouchers Payload</span>
+                  </button>
+                </div>
                 <div className="flex gap-2">
                   <button
+                    type="button"
                     onClick={() => handleLoadSample('CUSTOMERS')}
-                    className="flex-1 py-1.5 px-2 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-xl text-[11px] font-bold transition-colors flex items-center justify-center gap-1"
+                    className="flex-1 py-1.5 px-2 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-xl text-[11px] font-bold transition-colors flex items-center justify-center gap-1 cursor-pointer"
                   >
-                    <Sparkles className="w-3 h-3 text-amber-500" />
                     Sample Ledgers
                   </button>
                   <button
+                    type="button"
                     onClick={() => handleLoadSample('INVENTORY')}
-                    className="flex-1 py-1.5 px-2 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-xl text-[11px] font-bold transition-colors flex items-center justify-center gap-1"
+                    className="flex-1 py-1.5 px-2 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-xl text-[11px] font-bold transition-colors flex items-center justify-center gap-1 cursor-pointer"
                   >
-                    <Sparkles className="w-3 h-3 text-amber-500" />
                     Sample Stock
                   </button>
                 </div>
@@ -734,7 +1009,7 @@ export const TallyPrimeManager: React.FC<TallyPrimeManagerProps> = ({
                   {isReadingFile && (
                     <div className="mt-4 inline-flex items-center gap-2.5 px-4 py-2 rounded-2xl bg-blue-100 dark:bg-blue-950/80 border border-blue-300 dark:border-blue-800 text-blue-900 dark:text-blue-200 text-xs font-bold animate-pulse shadow-xs">
                       <RefreshCw className="w-4 h-4 animate-spin text-blue-600" />
-                      <span>Reading &amp; Analyzing Tally file... Checking XML schema, ledgers &amp; vouchers</span>
+                      <span>Reading &amp; Analyzing Tally file... Checking Ledgers, Dual Serials &amp; Vouchers</span>
                     </div>
                   )}
 
@@ -753,13 +1028,19 @@ export const TallyPrimeManager: React.FC<TallyPrimeManagerProps> = ({
                       {parseStats && (
                         <div className="flex items-center gap-1.5 text-[11px] font-mono">
                           <span className={`px-2 py-0.5 rounded-md ${parseStats.customersFound > 0 ? 'bg-blue-100 dark:bg-blue-950 text-blue-700 dark:text-blue-300 font-bold' : 'bg-slate-100 dark:bg-slate-800 text-slate-400'}`}>
-                            {parseStats.customersFound} Ledgers
+                            {parseStats.customersFound} Debtors
                           </span>
-                          <span className={`px-2 py-0.5 rounded-md ${parseStats.stockItemsFound > 0 ? 'bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 font-bold' : 'bg-slate-100 dark:bg-slate-800 text-slate-400'}`}>
-                            {parseStats.stockItemsFound} Stock Items
+                          <span className={`px-2 py-0.5 rounded-md ${parseStats.dealersFound > 0 ? 'bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 font-bold' : 'bg-slate-100 dark:bg-slate-800 text-slate-400'}`}>
+                            {parseStats.dealersFound} Creditors
+                          </span>
+                          <span className={`px-2 py-0.5 rounded-md ${parseStats.stockItemsFound > 0 ? 'bg-amber-100 dark:bg-amber-950 text-amber-700 dark:text-amber-300 font-bold' : 'bg-slate-100 dark:bg-slate-800 text-slate-400'}`}>
+                            {parseStats.stockItemsFound} Stock
                           </span>
                           <span className={`px-2 py-0.5 rounded-md ${parseStats.invoicesFound > 0 ? 'bg-purple-100 dark:bg-purple-950 text-purple-700 dark:text-purple-300 font-bold' : 'bg-slate-100 dark:bg-slate-800 text-slate-400'}`}>
                             {parseStats.invoicesFound} Invoices
+                          </span>
+                          <span className={`px-2 py-0.5 rounded-md ${parseStats.deliveryNotesFound > 0 ? 'bg-teal-100 dark:bg-teal-950 text-teal-700 dark:text-teal-300 font-bold' : 'bg-slate-100 dark:bg-slate-800 text-slate-400'}`}>
+                            {parseStats.deliveryNotesFound} Delivery Notes
                           </span>
                         </div>
                       )}
@@ -779,376 +1060,292 @@ export const TallyPrimeManager: React.FC<TallyPrimeManagerProps> = ({
                 </div>
               )}
 
-              {/* Cross-Category Detected Prompt (e.g. User selected CUSTOMERS but uploaded Stock Items) */}
-              {!isReadingFile && parseStats && parseStats.totalFound > 0 && activeParsedCount === 0 && (
-                <div className="mt-3 p-3.5 bg-amber-50 dark:bg-amber-950/40 border border-amber-300 dark:border-amber-800 rounded-2xl text-xs space-y-2">
-                  <div className="flex items-center gap-2 text-amber-800 dark:text-amber-200 font-bold">
-                    <Info className="w-4 h-4 shrink-0 text-amber-600" />
-                    <span>
-                      0 records match "{selectedCategory}", but records were found in other sections!
-                    </span>
-                  </div>
-                  <div className="flex flex-wrap gap-2 pt-1">
-                    {parseStats.stockItemsFound > 0 && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setSelectedCategory('INVENTORY');
-                          setSelectedItemIndices(parsedStock.map((_, i) => i));
-                        }}
-                        className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-xl font-bold flex items-center gap-1.5 transition-colors"
-                      >
-                        <Boxes className="w-3.5 h-3.5" />
-                        <span>Switch to Stock Items ({parseStats.stockItemsFound} found)</span>
-                      </button>
-                    )}
-                    {parseStats.customersFound > 0 && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setSelectedCategory('CUSTOMERS');
-                          setSelectedItemIndices(parsedCustomers.map((_, i) => i));
-                        }}
-                        className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold flex items-center gap-1.5 transition-colors"
-                      >
-                        <Users className="w-3.5 h-3.5" />
-                        <span>Switch to Customer Ledgers ({parseStats.customersFound} found)</span>
-                      </button>
-                    )}
-                    {parseStats.invoicesFound > 0 && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setSelectedCategory('INVOICES');
-                          setSelectedItemIndices(parsedInvoices.map((_, i) => i));
-                        }}
-                        className="px-3 py-1.5 bg-purple-600 hover:bg-purple-700 text-white rounded-xl font-bold flex items-center gap-1.5 transition-colors"
-                      >
-                        <Receipt className="w-3.5 h-3.5" />
-                        <span>Switch to Sales Invoices ({parseStats.invoicesFound} found)</span>
-                      </button>
-                    )}
-                  </div>
-                </div>
-              )}
-
-              {/* Diagnostic & Troubleshooting Card when 0 items detected in all categories */}
-              {!isReadingFile && parseStats && parseStats.totalFound === 0 && uploadedFileName && (
-                <div className="mt-3 p-4 bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-2xl space-y-3">
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="flex items-center gap-2">
-                      <HelpCircle className="w-4 h-4 text-amber-500 shrink-0" />
-                      <span className="font-bold text-xs text-slate-800 dark:text-slate-200">
-                        Diagnostic Details &amp; File Structure Inspector
-                      </span>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setShowRawInspector(!showRawInspector)}
-                      className="text-[11px] font-bold text-blue-600 dark:text-blue-400 hover:underline flex items-center gap-1 cursor-pointer"
-                    >
-                      {showRawInspector ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
-                      <span>{showRawInspector ? 'Hide Inspector' : 'Inspect Raw File'}</span>
-                    </button>
-                  </div>
-
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px] font-mono text-slate-600 dark:text-slate-400">
-                    <div className="p-2 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800">
-                      <span className="block text-[9px] uppercase tracking-wider text-slate-400 font-bold">Format</span>
-                      <strong className="text-slate-800 dark:text-slate-200">{parseStats.fileType}</strong>
-                    </div>
-                    <div className="p-2 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800">
-                      <span className="block text-[9px] uppercase tracking-wider text-slate-400 font-bold">Size</span>
-                      <strong className="text-slate-800 dark:text-slate-200">{(parseStats.fileSizeBytes / 1024).toFixed(1)} KB</strong>
-                    </div>
-                    <div className="p-2 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800">
-                      <span className="block text-[9px] uppercase tracking-wider text-slate-400 font-bold">Records Matched</span>
-                      <strong className="text-amber-600 font-black">0 Items</strong>
-                    </div>
-                    <div className="p-2 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800">
-                      <span className="block text-[9px] uppercase tracking-wider text-slate-400 font-bold">XML Parser</span>
-                      <strong className={parseStats.hasXmlError ? 'text-red-500' : 'text-emerald-500'}>
-                        {parseStats.hasXmlError ? 'Syntax Warning' : 'OK / Valid'}
-                      </strong>
-                    </div>
-                  </div>
-
-                  {parseStats.tagsDetected.length > 0 && (
-                    <div className="text-[11px] text-slate-500 dark:text-slate-400">
-                      <strong>Tags/Columns Detected:</strong>{' '}
-                      <span className="font-mono text-[10px] bg-slate-200 dark:bg-slate-700 px-1.5 py-0.5 rounded">
-                        {parseStats.tagsDetected.join(', ')}
-                      </span>
-                    </div>
-                  )}
-
-                  {/* Troubleshooting Advice */}
-                  <div className="text-[11px] text-slate-600 dark:text-slate-400 bg-amber-50/60 dark:bg-amber-950/20 p-2.5 rounded-xl border border-amber-200/60 dark:border-amber-900/40">
-                    <span className="font-bold text-amber-800 dark:text-amber-300 block mb-1">
-                      💡 How to Export from Tally Prime so it imports instantly:
-                    </span>
-                    <ul className="list-disc list-inside space-y-0.5">
-                      <li>For Customers: <strong>Gateway of Tally &gt; Chart of Accounts &gt; Ledgers &gt; Alt+E &gt; XML</strong></li>
-                      <li>For Stock Items: <strong>Gateway of Tally &gt; Chart of Accounts &gt; Stock Items &gt; Alt+E &gt; XML</strong></li>
-                      <li>For Invoices: <strong>Gateway of Tally &gt; Day Book &gt; Alt+E &gt; XML</strong></li>
-                    </ul>
-                  </div>
-
-                  {/* Collapsible Raw Inspector & Manual Re-parser */}
-                  {showRawInspector && (
-                    <div className="space-y-3 pt-2 border-t border-slate-200 dark:border-slate-700">
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <span className="text-[11px] font-bold text-slate-700 dark:text-slate-300 flex items-center gap-1">
-                          <Terminal className="w-3.5 h-3.5 text-blue-500" />
-                          <span>Raw File Preview (First 30 Lines):</span>
-                        </span>
-                        <div className="flex items-center gap-1.5 text-xs">
-                          <span className="text-[10px] text-slate-400">Force Delimiter:</span>
-                          {[
-                            { id: 'auto', label: 'Auto' },
-                            { id: ',', label: 'Comma (,)' },
-                            { id: '\t', label: 'Tab (TSV)' },
-                            { id: ';', label: 'Semicolon (;)' },
-                            { id: '|', label: 'Pipe (|)' },
-                          ].map((d) => (
-                            <button
-                              key={d.id}
-                              type="button"
-                              onClick={() => {
-                                setForcedDelimiter(d.id);
-                                processRawFileText(fileContentRaw, uploadedFileName, d.id);
-                              }}
-                              className={`px-2 py-0.5 rounded text-[10px] font-mono font-bold transition-colors ${
-                                forcedDelimiter === d.id
-                                  ? 'bg-blue-600 text-white'
-                                  : 'bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-300 hover:bg-slate-300'
-                              }`}
-                            >
-                              {d.label}
-                            </button>
-                          ))}
-                        </div>
-                      </div>
-
-                      <div className="bg-slate-900 text-slate-200 p-3 rounded-xl font-mono text-[10px] max-h-48 overflow-y-auto leading-relaxed border border-slate-800">
-                        {rawSampleLines.map((line, idx) => (
-                          <div key={idx} className="flex gap-2">
-                            <span className="text-slate-600 select-none w-6 text-right shrink-0">{idx + 1}</span>
-                            <span className="break-all whitespace-pre-wrap">{line}</span>
-                          </div>
-                        ))}
-                      </div>
-
-                      {/* Manual Force Parse Buttons */}
-                      <div className="flex flex-wrap items-center gap-2 pt-1">
-                        <span className="text-[10px] font-bold text-slate-400">Force Re-parse As:</span>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setSelectedCategory('CUSTOMERS');
-                            processRawFileText(fileContentRaw, uploadedFileName);
-                          }}
-                          className="px-2.5 py-1 bg-blue-100 hover:bg-blue-200 dark:bg-blue-950 dark:hover:bg-blue-900 text-blue-800 dark:text-blue-300 rounded-lg text-xs font-bold transition-colors"
-                        >
-                          Customer Ledgers
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setSelectedCategory('INVENTORY');
-                            processRawFileText(fileContentRaw, uploadedFileName);
-                          }}
-                          className="px-2.5 py-1 bg-indigo-100 hover:bg-indigo-200 dark:bg-indigo-950 dark:hover:bg-indigo-900 text-indigo-800 dark:text-indigo-300 rounded-lg text-xs font-bold transition-colors"
-                        >
-                          Stock Items
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setSelectedCategory('INVOICES');
-                            processRawFileText(fileContentRaw, uploadedFileName);
-                          }}
-                          className="px-2.5 py-1 bg-purple-100 hover:bg-purple-200 dark:bg-purple-950 dark:hover:bg-purple-900 text-purple-800 dark:text-purple-300 rounded-lg text-xs font-bold transition-colors"
-                        >
-                          Sales Invoices
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
-
               {importSuccessMessage && (
-                <div className="mt-3 p-3 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 rounded-xl text-xs text-emerald-700 dark:text-emerald-300 flex items-center gap-2">
-                  <CheckCircle2 className="w-4 h-4 shrink-0" />
-                  <span>{importSuccessMessage}</span>
+                <div className="mt-3 p-3 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 rounded-xl text-xs text-emerald-800 dark:text-emerald-300 flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600" />
+                  <span className="font-bold">{importSuccessMessage}</span>
                 </div>
               )}
             </div>
           </div>
 
-          {/* Step 2: Parsed Records Preview Table */}
+          {/* Master Summary Banner (Currencies, Groups, Units, Godowns, Accounts) */}
+          {parsedMasterSummary && (
+            <div className="bg-slate-900 text-white rounded-3xl p-5 border border-slate-800 shadow-md space-y-3">
+              <div className="flex items-center justify-between border-b border-slate-800 pb-3">
+                <div className="flex items-center gap-2">
+                  <Database className="w-4 h-4 text-amber-400" />
+                  <span className="text-xs font-black uppercase tracking-wider text-amber-400">
+                    Tally Master Structures Detected
+                  </span>
+                </div>
+                <span className="text-[10px] font-mono text-slate-400">
+                  {uploadedFileName || 'XML Payload'}
+                </span>
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 text-xs">
+                <div className="p-2.5 rounded-2xl bg-slate-800/80 border border-slate-700/60">
+                  <span className="text-[10px] font-bold text-slate-400 block uppercase">Currencies</span>
+                  <span className="font-mono font-black text-amber-300 text-xs block truncate">
+                    {parsedMasterSummary.currencies.length > 0
+                      ? parsedMasterSummary.currencies.map((c) => c.name || c.expandedSymbol).join(', ')
+                      : 'INR (₹)'}
+                  </span>
+                </div>
+
+                <div className="p-2.5 rounded-2xl bg-slate-800/80 border border-slate-700/60">
+                  <span className="text-[10px] font-bold text-slate-400 block uppercase">Units &amp; Godowns</span>
+                  <span className="font-mono font-black text-blue-300 text-xs block truncate">
+                    {parsedMasterSummary.units.map((u) => u.name).join(', ') || 'SET'} • {parsedMasterSummary.godowns.map((g) => g.name).join(', ') || 'Central'}
+                  </span>
+                </div>
+
+                <div className="p-2.5 rounded-2xl bg-slate-800/80 border border-slate-700/60">
+                  <span className="text-[10px] font-bold text-slate-400 block uppercase">Groups</span>
+                  <span className="font-mono font-black text-indigo-300 text-xs block truncate">
+                    {parsedMasterSummary.groups.length} ({parsedMasterSummary.groups.map((g) => g.name).slice(0, 2).join(', ')})
+                  </span>
+                </div>
+
+                <div className="p-2.5 rounded-2xl bg-slate-800/80 border border-slate-700/60">
+                  <span className="text-[10px] font-bold text-slate-400 block uppercase">Stock Items</span>
+                  <span className="font-mono font-black text-emerald-300 text-xs block truncate">
+                    {parsedMasterSummary.stockItems.length} Models
+                  </span>
+                </div>
+
+                <div className="p-2.5 rounded-2xl bg-slate-800/80 border border-slate-700/60">
+                  <span className="text-[10px] font-bold text-slate-400 block uppercase">Party Ledgers</span>
+                  <span className="font-mono font-black text-cyan-300 text-xs block truncate">
+                    {parsedMasterSummary.ledgers.length} Debtors/Creditors
+                  </span>
+                </div>
+
+                <div className="p-2.5 rounded-2xl bg-slate-800/80 border border-slate-700/60">
+                  <span className="text-[10px] font-bold text-slate-400 block uppercase">Financial/Tax</span>
+                  <span className="font-mono font-black text-purple-300 text-xs block truncate">
+                    {parsedMasterSummary.otherLedgers.length} Accounts
+                  </span>
+                </div>
+              </div>
+
+              {parsedMasterSummary.otherLedgers.length > 0 && (
+                <div className="text-[11px] text-slate-400 pt-1 flex items-center gap-2 flex-wrap">
+                  <span className="font-bold text-slate-300">Revenue &amp; Tax Ledgers Parsed:</span>
+                  {parsedMasterSummary.otherLedgers.map((l, i) => (
+                    <span key={i} className="px-2 py-0.5 rounded-md bg-slate-800 text-purple-300 font-mono text-[10px] border border-slate-700">
+                      {l.externalName} ({l.tallyParent})
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Step 2: Parsed Records Inspection & Batch Execution Table */}
           {activeParsedCount > 0 && (
-            <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 border border-slate-200 dark:border-slate-800 shadow-xs space-y-4 animate-in fade-in">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100 dark:border-slate-800">
+            <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 border border-slate-200 dark:border-slate-800 shadow-xs space-y-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-100 dark:border-slate-800">
                 <div>
-                  <h3 className="font-black text-sm text-slate-900 dark:text-white flex items-center gap-2">
-                    <Table className="w-4 h-4 text-red-600" />
-                    <span>Parsed {selectedCategory} Preview ({activeParsedCount} Detected)</span>
-                  </h3>
+                  <div className="flex items-center gap-2">
+                    <span className="w-5 h-5 rounded-full bg-red-600 text-white text-[10px] flex items-center justify-center font-bold">
+                      3
+                    </span>
+                    <h3 className="text-sm font-black text-slate-900 dark:text-white">
+                      Review Parsed Records ({activeParsedCount} Found)
+                    </h3>
+                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-100 dark:bg-blue-950 text-blue-700 dark:text-blue-300">
+                      Strategy: {importStrategy}
+                    </span>
+                  </div>
                   <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                    Review and select the items you wish to save into the live database.
+                    Inspect auto-linked Customer IDs, dual serial numbers, and tax breakdowns before executing live import.
                   </p>
                 </div>
 
                 <div className="flex items-center gap-3">
                   <button
+                    type="button"
                     onClick={handleToggleSelectAll}
-                    className="px-3 py-1.5 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-bold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                    className="px-3 py-1.5 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-xl text-xs font-bold transition-colors"
                   >
-                    {selectedItemIndices.length === activeParsedCount
-                      ? 'Deselect All'
-                      : 'Select All'}
+                    {selectedItemIndices.length === activeParsedCount ? 'Deselect All' : `Select All (${activeParsedCount})`}
                   </button>
+
                   <button
+                    type="button"
                     onClick={handleExecuteImport}
                     disabled={isImporting || selectedItemIndices.length === 0}
-                    className={`px-5 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 shadow-xs ${
-                      selectedItemIndices.length > 0 && !isImporting
-                        ? 'bg-red-600 hover:bg-red-700 text-white shadow-red-600/30'
-                        : 'bg-slate-200 dark:bg-slate-800 text-slate-400 cursor-not-allowed'
-                    }`}
+                    className="px-5 py-2 bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold shadow-xs flex items-center gap-2 transition-all cursor-pointer"
                   >
                     {isImporting ? (
                       <>
-                        <RefreshCw className="w-3.5 h-3.5 animate-spin" />
-                        <span>Saving to Firebase...</span>
+                        <RefreshCw className="w-4 h-4 animate-spin" />
+                        <span>Syncing to Database...</span>
                       </>
                     ) : (
                       <>
-                        <Check className="w-3.5 h-3.5" />
-                        <span>Import {selectedItemIndices.length} Selected Record(s)</span>
+                        <Database className="w-4 h-4" />
+                        <span>Execute Import ({selectedItemIndices.length})</span>
                       </>
                     )}
                   </button>
                 </div>
               </div>
 
-              {/* Table Render based on Category */}
-              <div className="overflow-x-auto border border-slate-200 dark:border-slate-800 rounded-2xl max-h-[420px] overflow-y-auto">
+              {/* Parsed Data High-Density Table */}
+              <div className="overflow-x-auto rounded-2xl border border-slate-200 dark:border-slate-800">
                 <table className="w-full text-left text-xs">
-                  <thead className="bg-slate-50 dark:bg-slate-950/80 sticky top-0 border-b border-slate-200 dark:border-slate-800 text-[11px] font-bold text-slate-500 uppercase font-mono">
+                  <thead className="bg-slate-50 dark:bg-slate-800/60 text-slate-600 dark:text-slate-400 font-bold uppercase text-[10px] tracking-wider border-b border-slate-200 dark:border-slate-800">
                     <tr>
                       <th className="p-3 w-10 text-center">
                         <input
                           type="checkbox"
                           checked={selectedItemIndices.length === activeParsedCount && activeParsedCount > 0}
                           onChange={handleToggleSelectAll}
-                          className="rounded text-red-600 focus:ring-red-500 cursor-pointer"
+                          className="rounded border-slate-300 text-red-600 focus:ring-red-500"
                         />
                       </th>
-                      {selectedCategory === 'CUSTOMERS' && (
-                        <>
-                          <th className="p-3">Customer / Ledger Name</th>
-                          <th className="p-3">Phone</th>
-                          <th className="p-3">Address</th>
-                          <th className="p-3">GSTIN</th>
-                          <th className="p-3 text-right">Opening Balance</th>
-                        </>
-                      )}
-                      {selectedCategory === 'INVENTORY' && (
-                        <>
-                          <th className="p-3">Appliance Name</th>
-                          <th className="p-3">Model No</th>
-                          <th className="p-3">IDU / ODU Models</th>
-                          <th className="p-3">Brand &amp; Type</th>
-                          <th className="p-3 text-right">Selling Price</th>
-                        </>
-                      )}
-                      {selectedCategory === 'INVOICES' && (
-                        <>
-                          <th className="p-3">Voucher / Bill No</th>
-                          <th className="p-3">Customer Party</th>
-                          <th className="p-3">Date</th>
-                          <th className="p-3">Items Summary</th>
-                          <th className="p-3 text-right">Total Amount</th>
-                        </>
-                      )}
+                      <th className="p-3">Record Details</th>
+                      <th className="p-3">Role / Parent Group</th>
+                      <th className="p-3">Auto-Link / Duplication Match</th>
+                      <th className="p-3 text-right">Balance / Amount (INR)</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                     {selectedCategory === 'CUSTOMERS' &&
-                      parsedCustomers.map((c, idx) => {
+                      parsedCustomers.map((cust, idx) => {
                         const isChecked = selectedItemIndices.includes(idx);
                         return (
-                          <tr
-                            key={idx}
-                            onClick={() => handleToggleSingle(idx)}
-                            className={`cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors ${
-                              isChecked ? 'bg-red-50/30 dark:bg-red-950/20' : ''
-                            }`}
-                          >
-                            <td className="p-3 text-center" onClick={(e) => e.stopPropagation()}>
+                          <tr key={idx} className={`hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors ${isChecked ? 'bg-red-50/30 dark:bg-red-950/10' : ''}`}>
+                            <td className="p-3 text-center">
                               <input
                                 type="checkbox"
                                 checked={isChecked}
                                 onChange={() => handleToggleSingle(idx)}
-                                className="rounded text-red-600 focus:ring-red-500 cursor-pointer"
+                                className="rounded border-slate-300 text-red-600 focus:ring-red-500"
                               />
                             </td>
-                            <td className="p-3 font-bold text-slate-900 dark:text-white">
-                              {c.externalName}
-                              {c.tallyParent && (
-                                <span className="ml-2 px-1.5 py-0.2 rounded bg-slate-100 dark:bg-slate-800 text-[9px] font-mono text-slate-500">
-                                  {c.tallyParent}
+                            <td className="p-3">
+                              <div className="font-bold text-slate-900 dark:text-white">{cust.externalName}</div>
+                              <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 flex flex-wrap gap-1.5">
+                                <span>Phone: {cust.phone || 'N/A'}</span>
+                                {cust.gstin && <span>• GSTIN: <strong className="font-mono text-slate-800 dark:text-slate-200">{cust.gstin}</strong></span>}
+                                {cust.panNumber && <span>• PAN: <strong className="font-mono text-slate-800 dark:text-slate-200">{cust.panNumber}</strong></span>}
+                              </div>
+                              <div className="text-[10px] text-slate-400 truncate max-w-xs">{cust.billingAddress}</div>
+                              {cust.billAllocations && cust.billAllocations.length > 0 && (
+                                <div className="text-[10px] text-blue-600 dark:text-blue-400 font-mono font-bold mt-1 bg-blue-50 dark:bg-blue-950/60 px-2 py-0.5 rounded border border-blue-200 dark:border-blue-900 inline-block">
+                                  Bill Allocations: {cust.billAllocations.map((b) => `${b.billName} (₹${b.amount.toLocaleString('en-IN')})`).join(', ')}
+                                </div>
+                              )}
+                            </td>
+                            <td className="p-3">
+                              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-100 dark:bg-blue-950 text-blue-800 dark:text-blue-300">
+                                {cust.tallyParent || 'Sundry Debtors'}
+                              </span>
+                            </td>
+                            <td className="p-3">
+                              {cust.existingMatchId ? (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300">
+                                  <Link2 className="w-3 h-3" />
+                                  Matches ID: {cust.existingMatchId} ({importStrategy})
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300">
+                                  <Sparkles className="w-3 h-3" />
+                                  New Customer Account
                                 </span>
                               )}
                             </td>
-                            <td className="p-3 font-mono">{c.phone || '-'}</td>
-                            <td className="p-3 text-slate-500 truncate max-w-xs">{c.billingAddress}</td>
-                            <td className="p-3 font-mono text-[11px]">{c.gstin || '-'}</td>
-                            <td className="p-3 text-right font-bold text-slate-900 dark:text-white">
-                              ₹{(c.accountBalance || 0).toLocaleString('en-IN')}
+                            <td className="p-3 text-right font-mono tabular-nums font-bold">
+                              <span className={cust.balanceDirection === 'Dr' ? 'text-blue-600 dark:text-blue-400' : 'text-emerald-600 dark:text-emerald-400'}>
+                                {cust.balanceDirection === 'Dr' ? 'Dr ' : 'Cr '}
+                                ₹{(cust.accountBalance || 0).toLocaleString('en-IN')}
+                              </span>
+                            </td>
+                          </tr>
+                        );
+                      })}
+
+                    {selectedCategory === 'DEALERS' &&
+                      parsedDealers.map((dlr, idx) => {
+                        const isChecked = selectedItemIndices.includes(idx);
+                        return (
+                          <tr key={idx} className={`hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors ${isChecked ? 'bg-red-50/30 dark:bg-red-950/10' : ''}`}>
+                            <td className="p-3 text-center">
+                              <input
+                                type="checkbox"
+                                checked={isChecked}
+                                onChange={() => handleToggleSingle(idx)}
+                                className="rounded border-slate-300 text-red-600 focus:ring-red-500"
+                              />
+                            </td>
+                            <td className="p-3">
+                              <div className="font-bold text-slate-900 dark:text-white">{dlr.externalName}</div>
+                              <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                                Phone: {dlr.phone || 'N/A'} • GSTIN: {dlr.gstin || 'N/A'}
+                              </div>
+                            </td>
+                            <td className="p-3">
+                              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-100 dark:bg-indigo-950 text-indigo-800 dark:text-indigo-300">
+                                {dlr.tallyParent || 'Sundry Creditors'}
+                              </span>
+                            </td>
+                            <td className="p-3">
+                              {dlr.existingMatchId ? (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300">
+                                  <Link2 className="w-3 h-3" />
+                                  Matched ID: {dlr.existingMatchId}
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300">
+                                  New Supplier Account
+                                </span>
+                              )}
+                            </td>
+                            <td className="p-3 text-right font-mono tabular-nums font-bold text-amber-600 dark:text-amber-400">
+                              Cr ₹{(dlr.accountBalance || 0).toLocaleString('en-IN')}
                             </td>
                           </tr>
                         );
                       })}
 
                     {selectedCategory === 'INVENTORY' &&
-                      parsedStock.map((it, idx) => {
+                      parsedStock.map((stk, idx) => {
                         const isChecked = selectedItemIndices.includes(idx);
                         return (
-                          <tr
-                            key={idx}
-                            onClick={() => handleToggleSingle(idx)}
-                            className={`cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors ${
-                              isChecked ? 'bg-red-50/30 dark:bg-red-950/20' : ''
-                            }`}
-                          >
-                            <td className="p-3 text-center" onClick={(e) => e.stopPropagation()}>
+                          <tr key={idx} className={`hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors ${isChecked ? 'bg-red-50/30 dark:bg-red-950/10' : ''}`}>
+                            <td className="p-3 text-center">
                               <input
                                 type="checkbox"
                                 checked={isChecked}
                                 onChange={() => handleToggleSingle(idx)}
-                                className="rounded text-red-600 focus:ring-red-500 cursor-pointer"
+                                className="rounded border-slate-300 text-red-600 focus:ring-red-500"
                               />
                             </td>
-                            <td className="p-3 font-bold text-slate-900 dark:text-white">
-                              {it.name}
-                            </td>
-                            <td className="p-3 font-mono">{it.modelNo}</td>
-                            <td className="p-3 text-[11px] font-mono text-blue-600 dark:text-blue-400">
-                              {it.indoorModelNo ? `IDU: ${it.indoorModelNo}` : '-'}
-                              {it.outdoorModelNo && ` | ODU: ${it.outdoorModelNo}`}
+                            <td className="p-3">
+                              <div className="font-bold text-slate-900 dark:text-white">{stk.name}</div>
+                              <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 flex flex-wrap gap-2">
+                                <span>Model: {stk.modelNo}</span>
+                                {stk.indoorUnitSerial && <span className="text-blue-600 dark:text-blue-400 font-mono font-bold">IDU SN: {stk.indoorUnitSerial}</span>}
+                                {stk.outdoorUnitSerial && <span className="text-purple-600 dark:text-purple-400 font-mono font-bold">ODU SN: {stk.outdoorUnitSerial}</span>}
+                              </div>
                             </td>
                             <td className="p-3">
-                              <span className="font-semibold text-slate-700 dark:text-slate-300">
-                                {it.brand}
-                              </span>{' '}
-                              <span className="text-slate-400">({it.type})</span>
+                              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
+                                {stk.godownName || 'Central Godown'}
+                              </span>
                             </td>
-                            <td className="p-3 text-right font-bold text-emerald-600">
-                              ₹{it.sellingPrice.toLocaleString('en-IN')}
+                            <td className="p-3">
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300">
+                                <PackageCheck className="w-3 h-3" />
+                                Ready for Store Stock
+                              </span>
+                            </td>
+                            <td className="p-3 text-right font-mono tabular-nums font-bold text-slate-900 dark:text-white">
+                              ₹{(stk.sellingPrice || 0).toLocaleString('en-IN')}
                             </td>
                           </tr>
                         );
@@ -1158,33 +1355,84 @@ export const TallyPrimeManager: React.FC<TallyPrimeManagerProps> = ({
                       parsedInvoices.map((inv, idx) => {
                         const isChecked = selectedItemIndices.includes(idx);
                         return (
-                          <tr
-                            key={idx}
-                            onClick={() => handleToggleSingle(idx)}
-                            className={`cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors ${
-                              isChecked ? 'bg-red-50/30 dark:bg-red-950/20' : ''
-                            }`}
-                          >
-                            <td className="p-3 text-center" onClick={(e) => e.stopPropagation()}>
+                          <tr key={idx} className={`hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors ${isChecked ? 'bg-red-50/30 dark:bg-red-950/10' : ''}`}>
+                            <td className="p-3 text-center">
                               <input
                                 type="checkbox"
                                 checked={isChecked}
                                 onChange={() => handleToggleSingle(idx)}
-                                className="rounded text-red-600 focus:ring-red-500 cursor-pointer"
+                                className="rounded border-slate-300 text-red-600 focus:ring-red-500"
                               />
                             </td>
-                            <td className="p-3 font-mono font-bold text-slate-900 dark:text-white">
-                              {inv.invoiceNumber}
+                            <td className="p-3">
+                              <div className="font-bold text-slate-900 dark:text-white">Voucher #{inv.invoiceNumber}</div>
+                              <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                                Party: <strong>{inv.customerName}</strong> ({inv.items.length} Line Items)
+                              </div>
+                              {inv.cgstAmount || inv.sgstAmount ? (
+                                <div className="text-[10px] font-mono text-slate-400 mt-0.5">
+                                  CGST: ₹{inv.cgstAmount} • SGST: ₹{inv.sgstAmount} (Taxable: ₹{inv.taxableAmount})
+                                </div>
+                              ) : null}
                             </td>
-                            <td className="p-3 font-bold">{inv.customerName}</td>
-                            <td className="p-3 font-mono text-[11px] text-slate-500">
-                              {inv.date || '-'}
+                            <td className="p-3">
+                              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-purple-100 dark:bg-purple-950 text-purple-800 dark:text-purple-300">
+                                {inv.vchType}
+                              </span>
                             </td>
-                            <td className="p-3 text-slate-500 truncate max-w-xs">
-                              {inv.items.map((i) => `${i.name} (x${i.quantity})`).join(', ')}
+                            <td className="p-3">
+                              {inv.matchedCustomerId ? (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300">
+                                  <Link2 className="w-3 h-3" />
+                                  Auto-Linked: {inv.matchedCustomerName || inv.matchedCustomerId}
+                                </span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-blue-100 dark:bg-blue-950 text-blue-800 dark:text-blue-300">
+                                  <Sparkles className="w-3 h-3" />
+                                  Auto-Create New Customer Account
+                                </span>
+                              )}
                             </td>
-                            <td className="p-3 text-right font-bold text-blue-600">
-                              ₹{inv.totalAmount.toLocaleString('en-IN')}
+                            <td className="p-3 text-right font-mono tabular-nums font-bold text-slate-900 dark:text-white">
+                              ₹{(inv.totalAmount || 0).toLocaleString('en-IN')}
+                            </td>
+                          </tr>
+                        );
+                      })}
+
+                    {selectedCategory === 'DELIVERY_NOTES' &&
+                      parsedDeliveryNotes.map((note, idx) => {
+                        const isChecked = selectedItemIndices.includes(idx);
+                        return (
+                          <tr key={idx} className={`hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors ${isChecked ? 'bg-red-50/30 dark:bg-red-950/10' : ''}`}>
+                            <td className="p-3 text-center">
+                              <input
+                                type="checkbox"
+                                checked={isChecked}
+                                onChange={() => handleToggleSingle(idx)}
+                                className="rounded border-slate-300 text-red-600 focus:ring-red-500"
+                              />
+                            </td>
+                            <td className="p-3">
+                              <div className="font-bold text-slate-900 dark:text-white">Challan #{note.invoiceNumber}</div>
+                              <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
+                                Customer: {note.customerName}
+                              </div>
+                              <div className="text-[10px] text-slate-400 truncate max-w-xs">{note.items.map((i) => i.name).join(', ')}</div>
+                            </td>
+                            <td className="p-3">
+                              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-teal-100 dark:bg-teal-950 text-teal-800 dark:text-teal-300">
+                                Delivery Challan
+                              </span>
+                            </td>
+                            <td className="p-3">
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-teal-100 dark:bg-teal-950 text-teal-800 dark:text-teal-300">
+                                <Truck className="w-3 h-3" />
+                                Routes to Pending Shipment
+                              </span>
+                            </td>
+                            <td className="p-3 text-right font-mono tabular-nums font-bold text-slate-900 dark:text-white">
+                              ₹{(note.totalAmount || 0).toLocaleString('en-IN')}
                             </td>
                           </tr>
                         );
@@ -1197,1044 +1445,134 @@ export const TallyPrimeManager: React.FC<TallyPrimeManagerProps> = ({
         </div>
       )}
 
-      {/* =========================================================================
-          TAB 2: EXPORT LAKHI DATA TO TALLY PRIME
-      {/* =========================================================================
-          TAB 2: EXPORT LAKHI DATA TO TALLY PRIME & EXCEL
-          ========================================================================= */}
+      {/* TAB 2: EXPORT DATA TO TALLY PRIME */}
       {activeTab === 'EXPORT' && (
-        <div className="space-y-6">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-            {/* Category selection for export */}
-            <div className="bg-white dark:bg-slate-900 rounded-3xl p-5 border border-slate-200 dark:border-slate-800 shadow-xs space-y-3">
-              <h3 className="text-xs font-black uppercase tracking-wider text-slate-500 dark:text-slate-400">
-                1. Select Data Type to Export
+        <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 border border-slate-200 dark:border-slate-800 shadow-xs space-y-6">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-100 dark:border-slate-800">
+            <div>
+              <h3 className="text-sm font-black text-slate-900 dark:text-white">
+                Export Lakhi ERP Data to Tally Prime
               </h3>
-
-              <div className="space-y-2">
-                {[
-                  {
-                    id: 'INVENTORY' as const,
-                    title: '1. Store Stock & AC Items',
-                    desc: 'AC Models, IDU/ODU details, carton serials, rates, HSN',
-                    icon: Boxes,
-                    count: inventory.length,
-                    tag: 'Tally XML / Excel',
-                  },
-                  {
-                    id: 'CUSTOMERS' as const,
-                    title: '2. Customer Ledgers (Debtors)',
-                    desc: 'Sundry Debtors with GSTIN, phone, address, credit balance',
-                    icon: Users,
-                    count: customers.length,
-                    tag: 'Tally XML / Excel',
-                  },
-                  {
-                    id: 'INVOICES' as const,
-                    title: '3. Sales Invoices (Vouchers)',
-                    desc: 'Sales vouchers with split taxes (CGST/SGST 9%), items & party',
-                    icon: Receipt,
-                    count: invoices.length,
-                    tag: 'Tally XML / Excel',
-                  },
-                  {
-                    id: 'QUOTATIONS' as const,
-                    title: '4. Quotations & Estimates (Q...)',
-                    desc: 'Pending & sent quotations register with line items & pricing',
-                    icon: FileText,
-                    count: quotations.length,
-                    tag: 'Excel / CSV',
-                  },
-                  {
-                    id: 'SHIPMENTS' as const,
-                    title: '5. Deliveries & Shipments (D...)',
-                    desc: 'Dispatch log, drivers, E-way bill numbers & statuses',
-                    icon: Truck,
-                    count: shipments.length,
-                    tag: 'Excel / CSV',
-                  },
-                  {
-                    id: 'KHATA' as const,
-                    title: '6. Who Owes Who (Dues & Khata)',
-                    desc: 'Customer credit aging, outstanding dues & khata balances',
-                    icon: Scale,
-                    count: customers.length,
-                    tag: 'Excel / CSV',
-                  },
-                  {
-                    id: 'BACKUP' as const,
-                    title: '7. Full ERP Database Backup',
-                    desc: 'Complete company backup JSON (all masters & records)',
-                    icon: HardDrive,
-                    count: customers.length + inventory.length + invoices.length + quotations.length,
-                    tag: 'Consolidated JSON',
-                  },
-                ].map((cat) => {
-                  const Icon = cat.icon;
-                  const isSelected = selectedCategory === cat.id;
-                  return (
-                    <button
-                      key={cat.id}
-                      onClick={() => setSelectedCategory(cat.id)}
-                      className={`w-full p-3.5 rounded-2xl border text-left transition-all flex items-start gap-3 ${
-                        isSelected
-                          ? 'bg-red-50/60 dark:bg-red-950/40 border-red-500/80 ring-2 ring-red-500/20'
-                          : 'bg-slate-50/50 dark:bg-slate-800/40 border-slate-200 dark:border-slate-800 hover:border-slate-300'
-                      }`}
-                    >
-                      <div
-                        className={`p-2 rounded-xl shrink-0 ${
-                          isSelected
-                            ? 'bg-red-600 text-white'
-                            : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300'
-                        }`}
-                      >
-                        <Icon className="w-4 h-4" />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center justify-between">
-                          <span className="font-bold text-xs text-slate-900 dark:text-white truncate">
-                            {cat.title}
-                          </span>
-                          <span className="text-[10px] font-mono text-slate-500 shrink-0 ml-1">
-                            {cat.count}
-                          </span>
-                        </div>
-                        <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 leading-snug line-clamp-1">
-                          {cat.desc}
-                        </p>
-                        <span className="inline-block mt-1 text-[9px] font-mono font-bold px-1.5 py-0.2 rounded bg-slate-200/70 dark:bg-slate-700/60 text-slate-700 dark:text-slate-300">
-                          {cat.tag}
-                        </span>
-                      </div>
-                    </button>
-                  );
-                })}
-              </div>
+              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                Generate Tally-formatted XML envelopes for instant import into Tally Prime via Gateway of Tally.
+              </p>
             </div>
 
-            {/* Export Configuration & Actions */}
-            <div className="md:col-span-2 bg-white dark:bg-slate-900 rounded-3xl p-6 border border-slate-200 dark:border-slate-800 shadow-xs flex flex-col justify-between space-y-6">
-              <div className="space-y-4">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100 dark:border-slate-800">
-                  <div>
-                    <h3 className="font-black text-sm text-slate-900 dark:text-white flex items-center gap-2">
-                      <Download className="w-4 h-4 text-red-600" />
-                      <span>
-                        Configure {selectedCategory === 'BACKUP' ? 'Full System Backup' : 'Data Export'}
-                      </span>
-                    </h3>
-                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                      Generate files ready for Tally Prime 1.0–4.1, Excel reconciliation, or external backups.
-                    </p>
-                  </div>
-
-                  {/* Format Toggle for categories that support XML vs CSV */}
-                  {(selectedCategory === 'CUSTOMERS' ||
-                    selectedCategory === 'INVENTORY' ||
-                    selectedCategory === 'INVOICES') ? (
-                    <div className="flex items-center bg-slate-100 dark:bg-slate-800 p-1 rounded-xl border border-slate-200 dark:border-slate-700">
-                      <button
-                        onClick={() => setExportFormat('XML')}
-                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
-                          exportFormat === 'XML'
-                            ? 'bg-red-600 text-white shadow-xs'
-                            : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
-                        }`}
-                      >
-                        Tally XML (Native)
-                      </button>
-                      <button
-                        onClick={() => setExportFormat('CSV')}
-                        className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${
-                          exportFormat === 'CSV'
-                            ? 'bg-red-600 text-white shadow-xs'
-                            : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
-                        }`}
-                      >
-                        Excel / CSV
-                      </button>
-                    </div>
-                  ) : selectedCategory === 'BACKUP' ? (
-                    <span className="px-3 py-1.5 rounded-lg text-xs font-bold bg-purple-100 dark:bg-purple-950/60 text-purple-700 dark:text-purple-300 font-mono">
-                      JSON Enterprise Archive
-                    </span>
-                  ) : (
-                    <span className="px-3 py-1.5 rounded-lg text-xs font-bold bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-mono">
-                      Excel / CSV Spreadsheet
-                    </span>
-                  )}
-                </div>
-
-                {/* Summary Card */}
-                <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-700/60 space-y-2">
-                  <div className="flex items-center justify-between text-xs font-bold">
-                    <span className="text-slate-700 dark:text-slate-300">
-                      Selected Dataset:
-                    </span>
-                    <span className="font-mono text-red-600 dark:text-red-400">
-                      {selectedCategory === 'INVOICES'
-                        ? `${invoices.length} Sales Tax Invoices`
-                        : selectedCategory === 'CUSTOMERS'
-                        ? `${customers.length} Customer Ledgers`
-                        : selectedCategory === 'INVENTORY'
-                        ? `${inventory.length} Stock Units`
-                        : selectedCategory === 'QUOTATIONS'
-                        ? `${quotations.length} Quotations & Estimates`
-                        : selectedCategory === 'SHIPMENTS'
-                        ? `${shipments.length} Deliveries & Shipments`
-                        : selectedCategory === 'KHATA'
-                        ? `${customers.length} Khata Ledger Balances`
-                        : `Complete Company Data (${customers.length} Customers, ${inventory.length} Stock, ${invoices.length} Bills)`}
-                    </span>
-                  </div>
-                  <div className="flex items-center justify-between text-xs">
-                    <span className="text-slate-500">Target Compatibility:</span>
-                    <span className="font-mono text-slate-700 dark:text-slate-300">
-                      {selectedCategory === 'CUSTOMERS' || selectedCategory === 'INVENTORY' || selectedCategory === 'INVOICES'
-                        ? exportFormat === 'XML'
-                          ? 'Tally Prime (Import Menu: Alt+O > Masters/Transactions)'
-                          : 'Microsoft Excel, Google Sheets, Tally Excel Import'
-                        : selectedCategory === 'BACKUP'
-                        ? 'Full ERP JSON Archive & Disaster Recovery'
-                        : 'Excel, Sheets, ERP Reporting & CSV Importers'}
-                    </span>
-                  </div>
-                  <div className="flex items-center justify-between text-xs">
-                    <span className="text-slate-500">File Structure:</span>
-                    <span className="font-mono text-slate-700 dark:text-slate-300">
-                      {selectedCategory === 'BACKUP'
-                        ? 'UTF-8 JSON Schema with Company Metadata'
-                        : exportFormat === 'XML' &&
-                          (selectedCategory === 'CUSTOMERS' || selectedCategory === 'INVENTORY' || selectedCategory === 'INVOICES')
-                        ? '<ENVELOPE> with <REQUESTDATA> & Tally Messages'
-                        : 'RFC-4180 Comma Separated Values (Excel ready)'}
-                    </span>
-                  </div>
-                </div>
-
-                {/* Quick Hint */}
-                <div className="p-3 bg-blue-50/60 dark:bg-blue-950/30 border border-blue-200/80 dark:border-blue-800 rounded-xl text-xs text-blue-800 dark:text-blue-300 flex items-start gap-2.5">
-                  <Info className="w-4 h-4 shrink-0 mt-0.5" />
-                  <div className="leading-relaxed">
-                    {selectedCategory === 'INVOICES' || selectedCategory === 'CUSTOMERS' || selectedCategory === 'INVENTORY' ? (
-                      <span>
-                        <strong>Tally Import Shortcut:</strong> In Tally Prime, press <strong>Alt+O (Import)</strong> on the top menu bar &gt; choose <strong>{selectedCategory === 'INVOICES' ? 'Transactions' : 'Masters'}</strong> &gt; select the downloaded XML file.
-                      </span>
-                    ) : selectedCategory === 'BACKUP' ? (
-                      <span>
-                        <strong>Disaster Recovery Guarantee:</strong> This file contains 100% of your company's data. Store this JSON backup in Google Drive, OneDrive, or an offline secure vault.
-                      </span>
-                    ) : (
-                      <span>
-                        <strong>Spreadsheet Reconciliation:</strong> Open the downloaded CSV in Microsoft Excel or Google Sheets for monthly audits, CA tax filings, or dispatch reviews.
-                      </span>
-                    )}
-                  </div>
-                </div>
-              </div>
-
-              {/* Action Buttons */}
-              <div className="flex flex-col sm:flex-row items-center gap-3 pt-4 border-t border-slate-100 dark:border-slate-800">
-                <button
-                  onClick={handleDownloadExport}
-                  className="w-full sm:flex-1 py-3 px-5 bg-red-600 hover:bg-red-700 text-white rounded-xl text-xs font-bold shadow-md shadow-red-600/30 flex items-center justify-center gap-2 transition-all hover:scale-102 active:scale-98"
-                >
-                  <Download className="w-4 h-4" />
-                  <span>
-                    Download{' '}
-                    {selectedCategory === 'BACKUP'
-                      ? 'Full System JSON Backup'
-                      : exportFormat === 'XML' &&
-                        (selectedCategory === 'CUSTOMERS' || selectedCategory === 'INVENTORY' || selectedCategory === 'INVOICES')
-                      ? 'Tally Prime XML'
-                      : 'Excel / CSV Spreadsheet'}
-                  </span>
-                </button>
-
-                <button
-                  onClick={handleCopyExport}
-                  className="w-full sm:w-auto py-3 px-4 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-colors"
-                >
-                  {exportCopied ? (
-                    <>
-                      <Check className="w-4 h-4 text-emerald-500" />
-                      <span>Copied!</span>
-                    </>
-                  ) : (
-                    <>
-                      <Copy className="w-4 h-4" />
-                      <span>Copy to Clipboard</span>
-                    </>
-                  )}
-                </button>
-
-                <button
-                  onClick={() => {
-                    setActiveGuideCategory(selectedCategory as GuideCategory);
-                    setActiveTab('GUIDE');
-                  }}
-                  className="w-full sm:w-auto py-3 px-4 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-300 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition-colors"
-                >
-                  <BookOpen className="w-4 h-4 text-red-600" />
-                  <span>View How to Export Guide</span>
-                </button>
-              </div>
+            <div className="flex items-center bg-slate-100 dark:bg-slate-800 p-1 rounded-2xl border border-slate-200 dark:border-slate-700">
+              <button
+                type="button"
+                onClick={() => setExportFormat('XML')}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                  exportFormat === 'XML'
+                    ? 'bg-red-600 text-white shadow-xs'
+                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
+                }`}
+              >
+                XML Envelope (Tally)
+              </button>
+              <button
+                type="button"
+                onClick={() => setExportFormat('CSV')}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                  exportFormat === 'CSV'
+                    ? 'bg-red-600 text-white shadow-xs'
+                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
+                }`}
+              >
+                CSV / Excel Sheet
+              </button>
             </div>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-3">
+            {[
+              { id: 'CUSTOMERS' as const, label: `Customers (${customers.length})` },
+              { id: 'INVENTORY' as const, label: `Stock Items (${inventory.length})` },
+              { id: 'INVOICES' as const, label: `Sales Invoices (${invoices.length})` },
+              { id: 'QUOTATIONS' as const, label: `Quotations (${quotations.length})` },
+              { id: 'SHIPMENTS' as const, label: `Shipments (${shipments.length})` },
+              { id: 'KHATA' as const, label: 'Dues Khata' },
+              { id: 'BACKUP' as const, label: 'Full Backup JSON' },
+            ].map((cat) => (
+              <button
+                key={cat.id}
+                type="button"
+                onClick={() => setSelectedCategory(cat.id)}
+                className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all ${
+                  selectedCategory === cat.id
+                    ? 'bg-slate-900 dark:bg-white text-white dark:text-slate-900 shadow-xs'
+                    : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200'
+                }`}
+              >
+                {cat.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Action Download / Copy Buttons */}
+          <div className="flex flex-wrap items-center gap-3 pt-2">
+            <button
+              type="button"
+              onClick={handleDownloadExport}
+              className="px-5 py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-2xl text-xs font-bold shadow-xs flex items-center gap-2 transition-all cursor-pointer"
+            >
+              <Download className="w-4 h-4" />
+              <span>Download {selectedCategory} ({exportFormat})</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={handleCopyExport}
+              className="px-4 py-2.5 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 rounded-2xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer"
+            >
+              {exportCopied ? <Check className="w-4 h-4 text-emerald-600" /> : <Copy className="w-4 h-4" />}
+              <span>{exportCopied ? 'Copied to Clipboard!' : 'Copy Raw Export'}</span>
+            </button>
           </div>
         </div>
       )}
 
-      {/* =========================================================================
-          TAB 3: HOW TO EXPORT EACH TYPE OF DATA IN THE SOFTWARE (COMPREHENSIVE GUIDE)
-          ========================================================================= */}
+      {/* TAB 3: DOCUMENTATION GUIDE */}
       {activeTab === 'GUIDE' && (
-        <div className="space-y-6">
-          {/* Guide Sub-Navigation */}
-          <div className="flex items-center gap-2 overflow-x-auto scrollbar-none pb-1">
-            {[
-              { id: 'CUSTOMERS' as const, label: '1. Customer Ledgers & Debtors', icon: Users },
-              { id: 'INVENTORY' as const, label: '2. Stock Items & AC Units', icon: Boxes },
-              { id: 'INVOICES' as const, label: '3. Sales Invoices / Day Book', icon: Receipt },
-              { id: 'QUOTATIONS' as const, label: '4. Quotations & Estimates', icon: FileText },
-              { id: 'SHIPMENTS' as const, label: '5. Deliveries & Dispatch (D...)', icon: Truck },
-              { id: 'KHATA' as const, label: '6. Dues & Khata Ledger', icon: Scale },
-              { id: 'BACKUP' as const, label: '7. Full ERP Database Backup', icon: HardDrive },
-              { id: 'IMPORT_TO_TALLY' as const, label: '8. How to Import Lakhi XML into Tally (Alt+O)', icon: Database },
-            ].map((g) => {
-              const Icon = g.icon;
-              const isActive = activeGuideCategory === g.id;
-              return (
-                <button
-                  key={g.id}
-                  onClick={() => setActiveGuideCategory(g.id)}
-                  className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all border ${
-                    isActive
-                      ? 'bg-red-600 text-white border-red-600 shadow-xs'
-                      : 'bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-800 hover:border-slate-300'
-                  }`}
-                >
-                  <Icon className={`w-3.5 h-3.5 ${isActive ? 'text-white' : 'text-slate-400'}`} />
-                  <span>{g.label}</span>
-                </button>
-              );
-            })}
+        <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 border border-slate-200 dark:border-slate-800 shadow-xs space-y-6">
+          <div>
+            <h3 className="text-sm font-black text-slate-900 dark:text-white">
+              Tally Prime Integration &amp; XML Reference Guide
+            </h3>
+            <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+              Follow these standard procedures to import files from Tally Prime into Lakhi ERP or import Lakhi XML files into Tally Prime.
+            </p>
           </div>
 
-          {/* Guide 1: Customer Ledgers */}
-          {activeGuideCategory === 'CUSTOMERS' && (
-            <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 border border-slate-200 dark:border-slate-800 shadow-xs space-y-6 animate-in fade-in">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-100 dark:border-slate-800">
-                <div className="flex items-center gap-3">
-                  <span className="p-3 rounded-2xl bg-blue-100 dark:bg-blue-950/60 text-blue-600 dark:text-blue-400 shrink-0">
-                    <Users className="w-6 h-6" />
-                  </span>
-                  <div>
-                    <h3 className="text-base font-black text-slate-900 dark:text-white">
-                      Customer Ledgers (Sundry Debtors) Data Export Guide
-                    </h3>
-                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                      Export party legal names, phone numbers, billing addresses, GSTIN numbers, and opening balances.
-                    </p>
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-2 shrink-0">
-                  <span className="text-xs font-mono font-bold px-2.5 py-1 rounded-lg bg-blue-50 dark:bg-blue-950/40 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800">
-                    {customers.length} Customer Masters Recorded
-                  </span>
-                  <button
-                    onClick={() => {
-                      setSelectedCategory('CUSTOMERS');
-                      setActiveTab('EXPORT');
-                    }}
-                    className="px-3.5 py-1.5 bg-red-600 hover:bg-red-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-xs transition-colors"
-                  >
-                    <Download className="w-3.5 h-3.5" />
-                    <span>Export Customers Now</span>
-                  </button>
-                </div>
-              </div>
-
-              {/* SECTION A: How to Export in Lakhi Software */}
-              <div className="space-y-3">
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-black uppercase tracking-wider text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-950/60 px-2.5 py-0.5 rounded-md">
-                    🅰️ How to Export from Lakhi Airconditioners ERP
-                  </span>
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800 space-y-1.5">
-                    <span className="text-[10px] font-black text-red-600 font-mono">Step 1</span>
-                    <h4 className="font-bold text-xs text-slate-900 dark:text-white">Open Tally Prime &gt; Export Tab</h4>
-                    <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
-                      Click the <strong>Tally Prime (Import/Export)</strong> tab on the staff navigation bar, or click <strong>Tally Prime Sync</strong> from the header.
-                    </p>
-                  </div>
-                  <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800 space-y-1.5">
-                    <span className="text-[10px] font-black text-red-600 font-mono">Step 2</span>
-                    <h4 className="font-bold text-xs text-slate-900 dark:text-white">Select "Customer Ledgers (Masters)"</h4>
-                    <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
-                      Choose <strong>Tally XML (Native)</strong> for automated ledger posting into Tally Prime, or <strong>Excel / CSV</strong> for spreadsheet contact lists.
-                    </p>
-                  </div>
-                  <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800 space-y-1.5">
-                    <span className="text-[10px] font-black text-red-600 font-mono">Step 3</span>
-                    <h4 className="font-bold text-xs text-slate-900 dark:text-white">Click "Download Tally Prime XML"</h4>
-                    <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
-                      A file named <code>Tally_Customers_Master_[date].xml</code> will download instantly to your device, formatted with <code>&lt;TALLYMESSAGE&gt;</code> envelope.
-                    </p>
-                  </div>
-                </div>
-              </div>
-
-              {/* SECTION B: How to Export from Tally Prime */}
-              <div className="space-y-3">
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-black uppercase tracking-wider text-slate-700 dark:text-slate-300 bg-slate-100 dark:bg-slate-800 px-2.5 py-0.5 rounded-md">
-                    🅱️ How to Export from Tally Prime (To Import into Lakhi)
-                  </span>
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                  {[
-                    {
-                      step: 'Step 1',
-                      title: 'Open Chart of Accounts',
-                      desc: 'From Gateway of Tally, select Chart of Accounts > Ledgers (or press Alt+G and search "Ledgers").',
-                      keys: 'Gateway > Chart of Accounts > Ledgers',
-                    },
-                    {
-                      step: 'Step 2',
-                      title: 'Press Export Shortcut',
-                      desc: 'Click Export on the top bar or press Alt + E, then press M for Masters.',
-                      keys: 'Alt + E > Masters',
-                    },
-                    {
-                      step: 'Step 3',
-                      title: 'Configure XML / Excel Format',
-                      desc: 'Press C (Configure). Set File Format to "XML (Data Interchange)". Set Include Dependent Info to "Yes".',
-                      keys: 'C (Configure) > XML',
-                    },
-                    {
-                      step: 'Step 4',
-                      title: 'Send & Upload into Lakhi',
-                      desc: 'Press Send (Ctrl+A). Switch to Lakhi Software > Tally Prime > Import tab and drop the file!',
-                      keys: 'Ctrl + A / Send',
-                    },
-                  ].map((s, idx) => (
-                    <div
-                      key={idx}
-                      className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800 space-y-2 flex flex-col justify-between"
-                    >
-                      <div>
-                        <span className="text-[10px] font-black uppercase text-blue-600 dark:text-blue-400">
-                          {s.step}
-                        </span>
-                        <h4 className="font-bold text-xs text-slate-900 dark:text-white mt-1">
-                          {s.title}
-                        </h4>
-                        <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 leading-relaxed">
-                          {s.desc}
-                        </p>
-                      </div>
-                      <div className="pt-2 border-t border-slate-200 dark:border-slate-700 font-mono text-[10px] text-slate-600 dark:text-slate-300 font-bold">
-                        ⌨️ {s.keys}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* SECTION C: Field Mapping Matrix */}
-              <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/30 border border-slate-200 dark:border-slate-800 space-y-3">
-                <h4 className="text-xs font-bold text-slate-900 dark:text-white">Field Mapping Matrix: Customer Ledgers</h4>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-left text-xs">
-                    <thead>
-                      <tr className="border-b border-slate-200 dark:border-slate-700 text-slate-500">
-                        <th className="pb-2 font-bold">Lakhi ERP Field</th>
-                        <th className="pb-2 font-bold">Tally XML Tag</th>
-                        <th className="pb-2 font-bold">Tally Parent Group</th>
-                        <th className="pb-2 font-bold">Sample Value</th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-100 dark:divide-slate-800 font-mono text-[11px]">
-                      <tr>
-                        <td className="py-1.5 font-bold text-slate-900 dark:text-white">Legal Bill Name</td>
-                        <td className="py-1.5 text-blue-600">&lt;NAME&gt;</td>
-                        <td className="py-1.5">&lt;PARENT&gt;Sundry Debtors&lt;/PARENT&gt;</td>
-                        <td className="py-1.5 text-slate-500">Gautam Enterprise (Ahmedabad)</td>
-                      </tr>
-                      <tr>
-                        <td className="py-1.5 font-bold text-slate-900 dark:text-white">Phone / Mobile</td>
-                        <td className="py-1.5 text-blue-600">&lt;LEDGERMOBILE&gt;</td>
-                        <td className="py-1.5">Party Contact Details</td>
-                        <td className="py-1.5 text-slate-500">+91 99980 21446</td>
-                      </tr>
-                      <tr>
-                        <td className="py-1.5 font-bold text-slate-900 dark:text-white">GSTIN Number</td>
-                        <td className="py-1.5 text-blue-600">&lt;PARTYGSTIN&gt;</td>
-                        <td className="py-1.5">Statutory / GST Registration</td>
-                        <td className="py-1.5 text-slate-500">24AAACH7409R1ZZ</td>
-                      </tr>
-                      <tr>
-                        <td className="py-1.5 font-bold text-slate-900 dark:text-white">Billing Address</td>
-                        <td className="py-1.5 text-blue-600">&lt;ADDRESS.LIST&gt;&lt;ADDRESS&gt;</td>
-                        <td className="py-1.5">Mailing Details</td>
-                        <td className="py-1.5 text-slate-500">Shop 14, SG Highway, Ahmedabad</td>
-                      </tr>
-                    </tbody>
-                  </table>
-                </div>
-              </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 text-xs text-slate-700 dark:text-slate-300">
+            <div className="p-4 bg-slate-50 dark:bg-slate-800/40 rounded-2xl border border-slate-200 dark:border-slate-800 space-y-3">
+              <h4 className="font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                <Upload className="w-4 h-4 text-red-600" />
+                How to Export XML from Tally Prime:
+              </h4>
+              <ol className="list-decimal list-inside space-y-1.5 leading-relaxed text-[11px]">
+                <li>Open Tally Prime and navigate to <strong>Gateway of Tally</strong>.</li>
+                <li>Go to <strong>Chart of Accounts &gt; Ledgers</strong> (for Customers) or <strong>Stock Items</strong> (for Inventory).</li>
+                <li>Press <strong>Alt + E (Export) &gt; Master</strong>.</li>
+                <li>Set File Format to <strong>XML (Data Interchange)</strong> and select file destination.</li>
+                <li>Drop the exported XML file directly into Lakhi ERP's Tally Integration Hub.</li>
+              </ol>
             </div>
-          )}
 
-          {/* Guide 2: Store Stock Items */}
-          {activeGuideCategory === 'INVENTORY' && (
-            <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 border border-slate-200 dark:border-slate-800 shadow-xs space-y-6 animate-in fade-in">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-100 dark:border-slate-800">
-                <div className="flex items-center gap-3">
-                  <span className="p-3 rounded-2xl bg-amber-100 dark:bg-amber-950/60 text-amber-600 dark:text-amber-400 shrink-0">
-                    <Boxes className="w-6 h-6" />
-                  </span>
-                  <div>
-                    <h3 className="text-base font-black text-slate-900 dark:text-white">
-                      Store Stock Items &amp; AC Appliances Data Export Guide
-                    </h3>
-                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                      Export AC models, indoor/outdoor model numbers, physical carton serial numbers, selling rates, and HSN codes.
-                    </p>
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-2 shrink-0">
-                  <span className="text-xs font-mono font-bold px-2.5 py-1 rounded-lg bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800">
-                    {inventory.length} Physical Stock Units
-                  </span>
-                  <button
-                    onClick={() => {
-                      setSelectedCategory('INVENTORY');
-                      setActiveTab('EXPORT');
-                    }}
-                    className="px-3.5 py-1.5 bg-red-600 hover:bg-red-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-xs transition-colors"
-                  >
-                    <Download className="w-3.5 h-3.5" />
-                    <span>Export Stock Now</span>
-                  </button>
-                </div>
-              </div>
-
-              {/* SECTION A: How to Export in Lakhi Software */}
-              <div className="space-y-3">
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-black uppercase tracking-wider text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-950/60 px-2.5 py-0.5 rounded-md">
-                    🅰️ How to Export from Lakhi Airconditioners ERP
-                  </span>
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800 space-y-1.5">
-                    <span className="text-[10px] font-black text-red-600 font-mono">Step 1</span>
-                    <h4 className="font-bold text-xs text-slate-900 dark:text-white">Go to Store Stock or Tally Tab</h4>
-                    <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
-                      Navigate to <strong>Store Stock</strong> on the top menu, or open <strong>Tally Prime (Import/Export) &gt; Export Data</strong>.
-                    </p>
-                  </div>
-                  <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800 space-y-1.5">
-                    <span className="text-[10px] font-black text-red-600 font-mono">Step 2</span>
-                    <h4 className="font-bold text-xs text-slate-900 dark:text-white">Select "Store Stock Items"</h4>
-                    <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
-                      Choose <strong>Tally XML</strong> to export Stock Item masters with <code>&lt;STOCKITEM&gt;</code>, base units (Nos), and pricing, or <strong>Excel / CSV</strong>.
-                    </p>
-                  </div>
-                  <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800 space-y-1.5">
-                    <span className="text-[10px] font-black text-red-600 font-mono">Step 3</span>
-                    <h4 className="font-bold text-xs text-slate-900 dark:text-white">Save &amp; Open in Tally / Excel</h4>
-                    <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
-                      Download <code>Tally_StockItems_Master_[date].xml</code>. In Tally Prime, import via <strong>Alt+O &gt; Masters</strong>.
-                    </p>
-                  </div>
-                </div>
-              </div>
-
-              {/* SECTION B: How to Export from Tally Prime */}
-              <div className="space-y-3">
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-black uppercase tracking-wider text-slate-700 dark:text-slate-300 bg-slate-100 dark:bg-slate-800 px-2.5 py-0.5 rounded-md">
-                    🅱️ How to Export from Tally Prime (To Import into Lakhi)
-                  </span>
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                  {[
-                    {
-                      step: 'Step 1',
-                      title: 'Open Stock Summary / Masters',
-                      desc: 'From Gateway of Tally, go to Chart of Accounts > Stock Items (or press Alt+G and type "Stock Items").',
-                      keys: 'Gateway > Stock Items',
-                    },
-                    {
-                      step: 'Step 2',
-                      title: 'Press Export Shortcut',
-                      desc: 'Press Alt+E on your keyboard or click the Export button on the top navigation bar.',
-                      keys: 'Alt + E > Masters',
-                    },
-                    {
-                      step: 'Step 3',
-                      title: 'Set Format to XML or Excel',
-                      desc: 'Under Configuration (C), set Format to XML (Data Interchange). Set "Show Closing Balances" to Yes.',
-                      keys: 'C > XML (Data Interchange)',
-                    },
-                    {
-                      step: 'Step 4',
-                      title: 'Send & Drop into Lakhi ERP',
-                      desc: 'Press Send. In Lakhi Software, select "Stock Items" on the Import tab and drag-and-drop the file!',
-                      keys: 'Press Enter or Send',
-                    },
-                  ].map((s, idx) => (
-                    <div
-                      key={idx}
-                      className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800 space-y-2 flex flex-col justify-between"
-                    >
-                      <div>
-                        <span className="text-[10px] font-black uppercase text-amber-600 dark:text-amber-400">
-                          {s.step}
-                        </span>
-                        <h4 className="font-bold text-xs text-slate-900 dark:text-white mt-1">
-                          {s.title}
-                        </h4>
-                        <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 leading-relaxed">
-                          {s.desc}
-                        </p>
-                      </div>
-                      <div className="pt-2 border-t border-slate-200 dark:border-slate-700 font-mono text-[10px] text-slate-600 dark:text-slate-300 font-bold">
-                        ⌨️ {s.keys}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* Pro-Tip Box */}
-              <div className="p-4 rounded-2xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 text-xs text-amber-900 dark:text-amber-200 leading-relaxed">
-                <strong>💡 AC Multi-Unit Splitting:</strong> In Lakhi ERP, Split Air Conditioners track both Indoor (IDU) and Outdoor (ODU) model and serial numbers. During Tally XML export, these are neatly embedded into the <code>&lt;DESCRIPTION&gt;</code> and <code>&lt;PARTNO&gt;</code> tags so your Tally technician can verify carton barcodes on delivery!
-              </div>
+            <div className="p-4 bg-slate-50 dark:bg-slate-800/40 rounded-2xl border border-slate-200 dark:border-slate-800 space-y-3">
+              <h4 className="font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                <Download className="w-4 h-4 text-emerald-600" />
+                How to Import Lakhi XML into Tally Prime:
+              </h4>
+              <ol className="list-decimal list-inside space-y-1.5 leading-relaxed text-[11px]">
+                <li>Download the Tally XML master or voucher file from the <strong>Export Data</strong> tab above.</li>
+                <li>Open Tally Prime and go to <strong>Alt + O (Import) &gt; Masters / Vouchers</strong>.</li>
+                <li>Enter the full path of the downloaded XML file.</li>
+                <li>Select <strong>Modify with New Data</strong> or <strong>Combine</strong> as needed.</li>
+                <li>Verify your ledgers and stock in Tally Day Book or Chart of Accounts.</li>
+              </ol>
             </div>
-          )}
-
-          {/* Guide 3: Sales Tax Invoices */}
-          {activeGuideCategory === 'INVOICES' && (
-            <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 border border-slate-200 dark:border-slate-800 shadow-xs space-y-6 animate-in fade-in">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-100 dark:border-slate-800">
-                <div className="flex items-center gap-3">
-                  <span className="p-3 rounded-2xl bg-emerald-100 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 shrink-0">
-                    <Receipt className="w-6 h-6" />
-                  </span>
-                  <div>
-                    <h3 className="text-base font-black text-slate-900 dark:text-white">
-                      Sales Tax Invoices &amp; Vouchers Data Export Guide
-                    </h3>
-                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                      Export sales registers with line items, tax components (Output CGST @ 9%, Output SGST @ 9%), customer debits, and payments.
-                    </p>
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-2 shrink-0">
-                  <span className="text-xs font-mono font-bold px-2.5 py-1 rounded-lg bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800">
-                    {invoices.length} Tax Invoices Recorded
-                  </span>
-                  <button
-                    onClick={() => {
-                      setSelectedCategory('INVOICES');
-                      setActiveTab('EXPORT');
-                    }}
-                    className="px-3.5 py-1.5 bg-red-600 hover:bg-red-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-xs transition-colors"
-                  >
-                    <Download className="w-3.5 h-3.5" />
-                    <span>Export Invoices Now</span>
-                  </button>
-                </div>
-              </div>
-
-              {/* SECTION A: How to Export in Lakhi Software */}
-              <div className="space-y-3">
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-black uppercase tracking-wider text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-950/60 px-2.5 py-0.5 rounded-md">
-                    🅰️ How to Export from Lakhi Airconditioners ERP
-                  </span>
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800 space-y-1.5">
-                    <span className="text-[10px] font-black text-red-600 font-mono">Step 1</span>
-                    <h4 className="font-bold text-xs text-slate-900 dark:text-white">Open Tally Prime Export Tab</h4>
-                    <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
-                      Go to <strong>Tally Prime &gt; Export Data</strong>, or click <strong>Tally Prime Sync</strong> from the <strong>Billing &amp; Invoices</strong> screen.
-                    </p>
-                  </div>
-                  <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800 space-y-1.5">
-                    <span className="text-[10px] font-black text-red-600 font-mono">Step 2</span>
-                    <h4 className="font-bold text-xs text-slate-900 dark:text-white">Select "Sales Invoices (Vouchers)"</h4>
-                    <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
-                      Choose <strong>Tally XML</strong> for automatic journal vouchers in Tally Day Book, or <strong>Excel / CSV</strong> for monthly CA sales registers.
-                    </p>
-                  </div>
-                  <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800 space-y-1.5">
-                    <span className="text-[10px] font-black text-red-600 font-mono">Step 3</span>
-                    <h4 className="font-bold text-xs text-slate-900 dark:text-white">Click "Download Tally Prime XML"</h4>
-                    <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
-                      Downloads <code>Tally_SalesVouchers_[date].xml</code>. Contains party debits, sales credits, and separate CGST &amp; SGST ledger entries.
-                    </p>
-                  </div>
-                </div>
-              </div>
-
-              {/* SECTION B: How to Export from Tally Prime */}
-              <div className="space-y-3">
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-black uppercase tracking-wider text-slate-700 dark:text-slate-300 bg-slate-100 dark:bg-slate-800 px-2.5 py-0.5 rounded-md">
-                    🅱️ How to Export from Tally Prime (To Import into Lakhi)
-                  </span>
-                </div>
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-                  {[
-                    {
-                      step: 'Step 1',
-                      title: 'Open Day Book or Sales Register',
-                      desc: 'From Gateway of Tally, go to Display More Reports (D) > Day Book (D) or Account Books > Sales Register.',
-                      keys: 'D > D (Day Book)',
-                    },
-                    {
-                      step: 'Step 2',
-                      title: 'Select Date Range',
-                      desc: 'Press F2 (Period) and select the starting and ending date for the invoices to export.',
-                      keys: 'F2 (Select Period)',
-                    },
-                    {
-                      step: 'Step 3',
-                      title: 'Export Transactions',
-                      desc: 'Press Alt+E > Transactions > Configure format to XML (Data Interchange) or Excel.',
-                      keys: 'Alt + E > Transactions',
-                    },
-                    {
-                      step: 'Step 4',
-                      title: 'Upload to Lakhi Software',
-                      desc: 'Save the exported file and upload it into the Import tab under "Sales Invoices" to sync books.',
-                      keys: 'Ctrl + A / Send',
-                    },
-                  ].map((s, idx) => (
-                    <div
-                      key={idx}
-                      className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800 space-y-2 flex flex-col justify-between"
-                    >
-                      <div>
-                        <span className="text-[10px] font-black uppercase text-emerald-600 dark:text-emerald-400">
-                          {s.step}
-                        </span>
-                        <h4 className="font-bold text-xs text-slate-900 dark:text-white mt-1">
-                          {s.title}
-                        </h4>
-                        <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-1 leading-relaxed">
-                          {s.desc}
-                        </p>
-                      </div>
-                      <div className="pt-2 border-t border-slate-200 dark:border-slate-700 font-mono text-[10px] text-slate-600 dark:text-slate-300 font-bold">
-                        ⌨️ {s.keys}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Guide 4: Quotations & Estimates */}
-          {activeGuideCategory === 'QUOTATIONS' && (
-            <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 border border-slate-200 dark:border-slate-800 shadow-xs space-y-6 animate-in fade-in">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-100 dark:border-slate-800">
-                <div className="flex items-center gap-3">
-                  <span className="p-3 rounded-2xl bg-purple-100 dark:bg-purple-950/60 text-purple-600 dark:text-purple-400 shrink-0">
-                    <FileText className="w-6 h-6" />
-                  </span>
-                  <div>
-                    <h3 className="text-base font-black text-slate-900 dark:text-white">
-                      Quotations &amp; Estimates (Q...) Data Export Guide
-                    </h3>
-                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                      Export active client estimates, proposals, itemized appliance breakdowns, and tax estimations.
-                    </p>
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-2 shrink-0">
-                  <span className="text-xs font-mono font-bold px-2.5 py-1 rounded-lg bg-purple-50 dark:bg-purple-950/40 text-purple-700 dark:text-purple-300 border border-purple-200 dark:border-purple-800">
-                    {quotations.length} Quotations Recorded
-                  </span>
-                  <button
-                    onClick={() => {
-                      setSelectedCategory('QUOTATIONS');
-                      setActiveTab('EXPORT');
-                    }}
-                    className="px-3.5 py-1.5 bg-red-600 hover:bg-red-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-xs transition-colors"
-                  >
-                    <Download className="w-3.5 h-3.5" />
-                    <span>Export Quotations CSV</span>
-                  </button>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800 space-y-2">
-                  <span className="text-[10px] font-black text-purple-600 font-mono">Format 1 • Excel / CSV</span>
-                  <h4 className="font-bold text-xs text-slate-900 dark:text-white">Quotations Register Spreadsheet</h4>
-                  <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
-                    Under the <strong>Export Data</strong> tab, select <strong>Quotations &amp; Estimates</strong> to download an RFC-4180 CSV containing Quote IDs, Customer Legal Names, Phone Numbers, Item Counts, Subtotals, and Statuses.
-                  </p>
-                </div>
-                <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800 space-y-2">
-                  <span className="text-[10px] font-black text-purple-600 font-mono">Format 2 • PDF Documents</span>
-                  <h4 className="font-bold text-xs text-slate-900 dark:text-white">Official Branded Quotation PDFs</h4>
-                  <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
-                    In the <strong>Quotes (Q...)</strong> tab, click the <strong>Download PDF</strong> or <strong>Share Link</strong> icon on any quote to generate client-ready estimates with your official brand logo, GSTIN, and QR payment codes.
-                  </p>
-                </div>
-                <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800 space-y-2">
-                  <span className="text-[10px] font-black text-purple-600 font-mono">Format 3 • WhatsApp Direct</span>
-                  <h4 className="font-bold text-xs text-slate-900 dark:text-white">Instant WhatsApp Estimates</h4>
-                  <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
-                    Click the <strong>WhatsApp</strong> icon next to any quotation to immediately send a pre-formatted itemized quote breakdown with total pricing directly to the customer's phone number.
-                  </p>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Guide 5: Shipments & Deliveries */}
-          {activeGuideCategory === 'SHIPMENTS' && (
-            <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 border border-slate-200 dark:border-slate-800 shadow-xs space-y-6 animate-in fade-in">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-100 dark:border-slate-800">
-                <div className="flex items-center gap-3">
-                  <span className="p-3 rounded-2xl bg-indigo-100 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 shrink-0">
-                    <Truck className="w-6 h-6" />
-                  </span>
-                  <div>
-                    <h3 className="text-base font-black text-slate-900 dark:text-white">
-                      Deliveries &amp; Dispatch (D...) Data Export Guide
-                    </h3>
-                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                      Export delivery challans, vehicle dispatch manifests, driver contact numbers, and delivery confirmation logs.
-                    </p>
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-2 shrink-0">
-                  <span className="text-xs font-mono font-bold px-2.5 py-1 rounded-lg bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
-                    {shipments.length} Dispatches Tracked
-                  </span>
-                  <button
-                    onClick={() => {
-                      setSelectedCategory('SHIPMENTS');
-                      setActiveTab('EXPORT');
-                    }}
-                    className="px-3.5 py-1.5 bg-red-600 hover:bg-red-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-xs transition-colors"
-                  >
-                    <Download className="w-3.5 h-3.5" />
-                    <span>Export Shipments CSV</span>
-                  </button>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800 space-y-2">
-                  <span className="text-[10px] font-black text-indigo-600 font-mono">Export Method 1</span>
-                  <h4 className="font-bold text-xs text-slate-900 dark:text-white">CSV Dispatch Manifest</h4>
-                  <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
-                    Under <strong>Export Data &gt; Deliveries &amp; Shipments</strong>, download a consolidated spreadsheet including Dispatch IDs (D...), Linked Tax Invoice references, Customer Destination Addresses, and Current Delivery Statuses.
-                  </p>
-                </div>
-                <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800 space-y-2">
-                  <span className="text-[10px] font-black text-indigo-600 font-mono">Export Method 2</span>
-                  <h4 className="font-bold text-xs text-slate-900 dark:text-white">Delivery Challan PDF &amp; Driver Copy</h4>
-                  <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
-                    In the <strong>Deliveries &amp; Tracking (D...)</strong> tab, click <strong>Print Delivery Challan</strong> to generate the physical gate-pass copy for your transport vehicle and customer signature.
-                  </p>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Guide 6: Dues & Khata */}
-          {activeGuideCategory === 'KHATA' && (
-            <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 border border-slate-200 dark:border-slate-800 shadow-xs space-y-6 animate-in fade-in">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-100 dark:border-slate-800">
-                <div className="flex items-center gap-3">
-                  <span className="p-3 rounded-2xl bg-rose-100 dark:bg-rose-950/60 text-rose-600 dark:text-rose-400 shrink-0">
-                    <Scale className="w-6 h-6" />
-                  </span>
-                  <div>
-                    <h3 className="text-base font-black text-slate-900 dark:text-white">
-                      Who Owes Who (Dues &amp; Khata) Data Export Guide
-                    </h3>
-                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                      Export outstanding customer aging schedules, unpaid balance rosters, and credit/advance fund positions.
-                    </p>
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-2 shrink-0">
-                  <button
-                    onClick={() => {
-                      setSelectedCategory('KHATA');
-                      setActiveTab('EXPORT');
-                    }}
-                    className="px-3.5 py-1.5 bg-red-600 hover:bg-red-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-xs transition-colors"
-                  >
-                    <Download className="w-3.5 h-3.5" />
-                    <span>Export Khata CSV</span>
-                  </button>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800 space-y-2">
-                  <span className="text-[10px] font-black text-rose-600 font-mono">1. Outstanding Balance Spreadsheet</span>
-                  <h4 className="font-bold text-xs text-slate-900 dark:text-white">Export Dues Aging Report (CSV)</h4>
-                  <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
-                    Under <strong>Export Data</strong>, choose <strong>Who Owes Who (Dues &amp; Khata)</strong> to generate an instant CSV report containing every debtor's legal name, total invoiced volume, and net outstanding balance.
-                  </p>
-                </div>
-                <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800 space-y-2">
-                  <span className="text-[10px] font-black text-rose-600 font-mono">2. Individual Customer Ledger Statement</span>
-                  <h4 className="font-bold text-xs text-slate-900 dark:text-white">Print Customer Statement (PDF)</h4>
-                  <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
-                    In the <strong>Customers &amp; Ledger</strong> tab, select any customer and click <strong>Print Statement</strong> to generate a full chronological ledger of bills and payment receipts (T... formula).
-                  </p>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Guide 7: Full ERP Database Backup */}
-          {activeGuideCategory === 'BACKUP' && (
-            <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 border border-slate-200 dark:border-slate-800 shadow-xs space-y-6 animate-in fade-in">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-100 dark:border-slate-800">
-                <div className="flex items-center gap-3">
-                  <span className="p-3 rounded-2xl bg-teal-100 dark:bg-teal-950/60 text-teal-600 dark:text-teal-400 shrink-0">
-                    <HardDrive className="w-6 h-6" />
-                  </span>
-                  <div>
-                    <h3 className="text-base font-black text-slate-900 dark:text-white">
-                      Full ERP Database Backup (Disaster Recovery) Guide
-                    </h3>
-                    <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                      Export 100% of your company's records in one consolidated, encrypted-ready JSON database archive.
-                    </p>
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-2 shrink-0">
-                  <button
-                    onClick={() => {
-                      setSelectedCategory('BACKUP');
-                      setActiveTab('EXPORT');
-                    }}
-                    className="px-3.5 py-1.5 bg-red-600 hover:bg-red-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-xs transition-colors"
-                  >
-                    <Download className="w-3.5 h-3.5" />
-                    <span>Download Full Backup JSON</span>
-                  </button>
-                </div>
-              </div>
-
-              <div className="space-y-4">
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800 space-y-2">
-                    <span className="text-[10px] font-black text-teal-600 font-mono">1. Complete Portability</span>
-                    <h4 className="font-bold text-xs text-slate-900 dark:text-white">Includes All Masters &amp; Vouchers</h4>
-                    <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
-                      The backup JSON contains your complete Customer Directory, Store Stock, Sales Invoices, Estimates, Delivery Trackers, and Business GST Settings.
-                    </p>
-                  </div>
-                  <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800 space-y-2">
-                    <span className="text-[10px] font-black text-teal-600 font-mono">2. Zero Vendor Lock-In</span>
-                    <h4 className="font-bold text-xs text-slate-900 dark:text-white">Standard Open JSON Format</h4>
-                    <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
-                      All records are structured with ISO timestamps, standard currency fields, and relational IDs that can be migrated to PostgreSQL, MySQL, or SAP.
-                    </p>
-                  </div>
-                  <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800 space-y-2">
-                    <span className="text-[10px] font-black text-teal-600 font-mono">3. Recommended Frequency</span>
-                    <h4 className="font-bold text-xs text-slate-900 dark:text-white">Weekly Enterprise Backup</h4>
-                    <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
-                      We recommend downloading a full backup every Friday evening and archiving it on an external hard drive or secure company cloud vault.
-                    </p>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Guide 8: How to Import into Tally Prime */}
-          {activeGuideCategory === 'IMPORT_TO_TALLY' && (
-            <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 border border-slate-200 dark:border-slate-800 shadow-xs space-y-5 animate-in fade-in">
-              <div className="flex items-center gap-3">
-                <span className="p-2.5 rounded-2xl bg-purple-100 dark:bg-purple-950/60 text-purple-600 dark:text-purple-400">
-                  <Database className="w-5 h-5" />
-                </span>
-                <div>
-                  <h3 className="text-base font-black text-slate-900 dark:text-white">
-                    How to Import Lakhi Software XML into Tally Prime (Alt + O)
-                  </h3>
-                  <p className="text-xs text-slate-500 dark:text-slate-400">
-                    Step-by-step instructions to post exported sales vouchers and customer masters directly into your Tally Prime company.
-                  </p>
-                </div>
-              </div>
-
-              <div className="space-y-4">
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800 space-y-2">
-                    <span className="px-2 py-0.5 rounded-md bg-purple-100 dark:bg-purple-950 text-purple-700 dark:text-purple-300 text-[10px] font-black font-mono">
-                      Step 1 • Export from Lakhi
-                    </span>
-                    <h4 className="font-bold text-xs text-slate-900 dark:text-white mt-1">
-                      Download XML from Lakhi ERP
-                    </h4>
-                    <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
-                      Go to the <strong>Export Data</strong> tab above. Choose <strong>Sales Invoices (Vouchers)</strong> or <strong>Customer Ledgers</strong>, and click <strong>Download Tally Prime XML</strong>.
-                    </p>
-                  </div>
-
-                  <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800 space-y-2">
-                    <span className="px-2 py-0.5 rounded-md bg-purple-100 dark:bg-purple-950 text-purple-700 dark:text-purple-300 text-[10px] font-black font-mono">
-                      Step 2 • Press Alt + O in Tally
-                    </span>
-                    <h4 className="font-bold text-xs text-slate-900 dark:text-white mt-1">
-                      Open Tally Import Menu
-                    </h4>
-                    <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
-                      In Tally Prime, press <strong>Alt + O (Import)</strong> on the top menu bar. Select <strong>Transactions</strong> (for Invoices) or <strong>Masters</strong> (for Customers / Items).
-                    </p>
-                  </div>
-
-                  <div className="p-4 rounded-2xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800 space-y-2">
-                    <span className="px-2 py-0.5 rounded-md bg-purple-100 dark:bg-purple-950 text-purple-700 dark:text-purple-300 text-[10px] font-black font-mono">
-                      Step 3 • Confirm Import
-                    </span>
-                    <h4 className="font-bold text-xs text-slate-900 dark:text-white mt-1">
-                      Select XML File &amp; Post
-                    </h4>
-                    <p className="text-[11px] text-slate-500 dark:text-slate-400 leading-relaxed">
-                      Browse to your Downloads folder or paste the XML file path. Press <strong>Enter</strong>. Tally Prime immediately posts all vouchers into your books with CGST, SGST, and party ledger!
-                    </p>
-                  </div>
-                </div>
-
-                <div className="p-4 rounded-2xl bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 text-xs text-emerald-800 dark:text-emerald-300 leading-relaxed">
-                  <strong>💡 Pro-Tip for Tally Prime Error Log:</strong> If Tally reports any missing ledger (e.g., "Output CGST @ 9%"), ensure your company chart of accounts has standard ledgers named <em>Output CGST @ 9%</em>, <em>Output SGST @ 9%</em>, and <em>Sales Account</em>.
-                </div>
-              </div>
-            </div>
-          )}
+          </div>
         </div>
       )}
     </div>

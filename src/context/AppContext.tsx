@@ -871,14 +871,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
+  // Helper to remove 'undefined' fields before writing/updating in Firestore
+  const cleanFirestorePayload = <T extends Record<string, any>>(obj: T): Record<string, any> => {
+    const cleaned: Record<string, any> = {};
+    Object.keys(obj).forEach((key) => {
+      const val = obj[key];
+      if (val !== undefined) {
+        cleaned[key] = val;
+      }
+    });
+    return cleaned;
+  };
+
   const updateCustomer = async (id: string, data: Partial<Customer>) => {
     try {
-      await updateDoc(doc(db, 'customers', id), {
+      const payload = cleanFirestorePayload({
         ...data,
         updatedAt: new Date().toISOString(),
       });
+      await updateDoc(doc(db, 'customers', id), payload);
       if (activeCustomer && activeCustomer.id === id) {
-        setActiveCustomer((prev) => (prev ? { ...prev, ...data, updatedAt: new Date().toISOString() } : prev));
+        setActiveCustomer((prev) => (prev ? { ...prev, ...payload } as Customer : prev));
       }
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, `customers/${id}`);
@@ -1523,10 +1536,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const updateAnyDocument = async (collectionName: string, id: string, data: Record<string, any>) => {
     try {
-      await updateDoc(doc(db, collectionName, id), {
+      const payload = cleanFirestorePayload({
         ...data,
         updatedAt: new Date().toISOString(),
       });
+      await updateDoc(doc(db, collectionName, id), payload);
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, `${collectionName}/${id}`);
       throw err;
@@ -1545,11 +1559,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const createAnyDocument = async (collectionName: string, data: Record<string, any>, customId?: string) => {
     try {
       const docId = customId && customId.trim() ? customId.trim() : `${collectionName.slice(0, 3).toUpperCase()}-${Date.now()}`;
-      await setDoc(doc(db, collectionName, docId), {
+      const payload = cleanFirestorePayload({
         ...data,
         id: docId,
-        createdAt: new Date().toISOString(),
+        createdAt: data.createdAt || new Date().toISOString(),
       });
+      await setDoc(doc(db, collectionName, docId), payload);
       return docId;
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, `${collectionName}`);

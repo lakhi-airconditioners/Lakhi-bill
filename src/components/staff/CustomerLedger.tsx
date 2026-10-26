@@ -18,6 +18,7 @@ import { useApp } from '../../context/AppContext';
 import { Customer, PaymentMode, PaymentTreatment } from '../../types';
 import { getYYYYMMDD } from '../../utils/idGenerator';
 import { CustomerSelectBox } from '../common/CustomerSelectBox';
+import { CustomerModal } from '../common/CustomerModal';
 
 interface CustomerLedgerProps {
   onOpenTally?: (tab?: 'IMPORT' | 'EXPORT' | 'GUIDE', category?: any) => void;
@@ -30,6 +31,7 @@ export const CustomerLedger: React.FC<CustomerLedgerProps> = ({ onOpenTally }) =
   const [search, setSearch] = useState('');
   const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null);
   const [isAddCustomerOpen, setIsAddCustomerOpen] = useState(false);
+  const [isEditCustomerModalOpen, setIsEditCustomerModalOpen] = useState(false);
   const [isAddTxOpen, setIsAddTxOpen] = useState(false);
 
   // Staff Change PIN Modal State
@@ -318,19 +320,30 @@ export const CustomerLedger: React.FC<CustomerLedgerProps> = ({ onOpenTally }) =
                     <Lock className="w-4 h-4 text-slate-400" />
                     <span>Portal PIN: <strong>{selectedCustomer.accessPin}</strong></span>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setNewPinInput('');
-                      setPinChangeError('');
-                      setPinChangeSuccess('');
-                      setIsChangePinOpen(true);
-                    }}
-                    className="px-2 py-1 bg-red-50 dark:bg-red-950/40 text-red-600 dark:text-red-400 hover:bg-red-100 rounded-lg text-[10px] font-bold flex items-center gap-1 transition-colors"
-                  >
-                    <Key className="w-3 h-3" />
-                    Change PIN
-                  </button>
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setIsEditCustomerModalOpen(true)}
+                      className="px-2 py-1 bg-blue-50 dark:bg-blue-950/40 text-blue-600 dark:text-blue-400 hover:bg-blue-100 rounded-lg text-[10px] font-bold flex items-center gap-1 transition-colors"
+                      title="Edit Customer Profile Information"
+                    >
+                      <Edit2 className="w-3 h-3" />
+                      Edit Profile
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setNewPinInput('');
+                        setPinChangeError('');
+                        setPinChangeSuccess('');
+                        setIsChangePinOpen(true);
+                      }}
+                      className="px-2 py-1 bg-red-50 dark:bg-red-950/40 text-red-600 dark:text-red-400 hover:bg-red-100 rounded-lg text-[10px] font-bold flex items-center gap-1 transition-colors"
+                    >
+                      <Key className="w-3 h-3" />
+                      Change PIN
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>
@@ -876,6 +889,14 @@ export const CustomerLedger: React.FC<CustomerLedgerProps> = ({ onOpenTally }) =
             </form>
           </div>
         </div>
+      )}
+      {/* Edit Customer Profile Modal */}
+      {isEditCustomerModalOpen && selectedCustomer && (
+        <CustomerModal
+          isOpen={isEditCustomerModalOpen}
+          onClose={() => setIsEditCustomerModalOpen(false)}
+          customerToEdit={selectedCustomer}
+        />
       )}
     </div>
   );
