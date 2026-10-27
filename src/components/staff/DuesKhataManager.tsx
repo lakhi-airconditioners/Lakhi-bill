@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
 import { PayableRecord, PaymentMode, Invoice } from '../../types';
+import { formatCurrency } from '../../utils/currencyHelper';
 
 export const DuesKhataManager: React.FC = () => {
   const {

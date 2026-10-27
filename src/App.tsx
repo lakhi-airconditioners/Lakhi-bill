@@ -15,7 +15,7 @@ import { OfflineIndicator } from './components/common/OfflineIndicator';
 import { Quotation, Invoice } from './types';
 import { BrandLogoManager } from './components/staff/BrandLogoManager';
 import { BrandLogoModal } from './components/common/BrandLogoModal';
-import { TallyPrimeManager, TallyCategory } from './components/staff/TallyPrimeManager';
+import { TallyPrimeManager } from './components/staff/TallyPrimeManager';
 import {
   Zap,
   FileCheck2,
@@ -99,19 +99,6 @@ function MainApp() {
     }
   }, [invoices, quotations, gstNumber]);
 
-  // Tally Prime State
-  const [tallyInitialTab, setTallyInitialTab] = useState<'IMPORT' | 'EXPORT' | 'GUIDE'>('IMPORT');
-  const [tallyInitialCategory, setTallyInitialCategory] = useState<TallyCategory>('INVENTORY');
-
-  const handleOpenTally = (
-    tab: 'IMPORT' | 'EXPORT' | 'GUIDE' = 'IMPORT',
-    cat: TallyCategory = 'INVENTORY'
-  ) => {
-    setTallyInitialTab(tab);
-    setTallyInitialCategory(cat);
-    setActiveStaffTab('tally');
-  };
-
   const pendingClaimsCount = claims.filter((c) => c.status === 'PENDING').length;
 
   const handleConvertToInvoice = (quote: Quotation) => {
@@ -129,7 +116,7 @@ function MainApp() {
     { id: 'quotations', label: 'Quotes (Q...)', icon: FileCheck2 },
     { id: 'invoices', label: 'Billing & Invoices (I...)', icon: Receipt },
     { id: 'inventory', label: 'Store Stock', icon: Boxes },
-    { id: 'tally', label: '📊 Tally Prime (Import/Export)', icon: FileSpreadsheet },
+    { id: 'lead_hub', label: '⚡ LA-D Data Hub', icon: Zap },
     { id: 'shipments', label: 'Deliveries & Tracking (D...)', icon: Truck },
     { id: 'customers', label: 'Customers & Ledger (C/T...)', icon: Users },
     { id: 'khata', label: 'Who Owes Who (Dues & Khata)', icon: Scale },
@@ -189,7 +176,6 @@ function MainApp() {
               onShipInvoice={handleShipInvoice}
               onOpenAiAssistant={() => setIsAiDrawerOpen(true)}
               onOpenBarcodeScanner={() => setActiveStaffTab('inventory')}
-              onOpenTally={handleOpenTally}
             />
           )}
 
@@ -204,7 +190,6 @@ function MainApp() {
               initialStockItemToBill={stockItemToBill}
               onClearInitialStock={() => setStockItemToBill(null)}
               onOpenNewShipmentForInvoice={handleShipInvoice}
-              onOpenTally={handleOpenTally}
             />
           )}
 
@@ -214,15 +199,11 @@ function MainApp() {
                 setStockItemToBill(item);
                 setActiveStaffTab('invoices');
               }}
-              onOpenTally={handleOpenTally}
             />
           )}
 
-          {activeStaffTab === 'tally' && (
-            <TallyPrimeManager
-              initialTab={tallyInitialTab}
-              initialCategory={tallyInitialCategory}
-            />
+          {activeStaffTab === 'lead_hub' && (
+            <TallyPrimeManager />
           )}
 
           {activeStaffTab === 'shipments' && (
@@ -233,7 +214,7 @@ function MainApp() {
           )}
 
           {activeStaffTab === 'customers' && (
-            <CustomerLedger onOpenTally={handleOpenTally} />
+            <CustomerLedger />
           )}
 
           {activeStaffTab === 'khata' && <DuesKhataManager />}

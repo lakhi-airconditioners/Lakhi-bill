@@ -1,18 +1,49 @@
-export type IdTypePrefix = 'I' | 'Q' | 'T' | 'D' | 'C';
+export type IdTypePrefix = 'I' | 'Q' | 'STK' | 'D' | 'C' | 'T' | 'V';
 
 export interface Customer {
-  id: string; // e.g., C202610094102
-  internalName: string; // Staff dealer notes / alias (e.g. "Sharma Ji Project Alpha - Wholesale")
+  id: string; // e.g., C202610271137
+  internalName: string; // Staff dealer notes / alias (e.g. "Sharma Ji - Tally Master Ledger")
   externalName: string; // Official legal name shown on bills and portal
   phone: string;
   email?: string;
   gstin?: string; // GSTIN Identification Number
+  pan?: string; // PAN identifier
   notes?: string; // Internal dealer / import notes
   billingAddress: string; // Billing address(es)
   installationAddress: string; // Installation address(es)
   accessPin: string; // 4-digit PIN for quick customer portal access
   accountBalance: number; // Positive (+) = Advance funds; Negative (-) = Credit owed
+  openingBalance?: number;
+  currentBalance?: number;
+  customMiddleId?: string; // "VIP-CORP" or "20261027"
   linkedUid?: string; // Firebase Auth UID if converted to permanent
+  transactions?: TransactionRecord[];
+  createdAt: string;
+  updatedAt?: string;
+}
+
+// Strict 6 Vendor Categories mandated by LEA-D 4.0
+export type VendorCategory =
+  | 'Supplier Stock / Consignment'
+  | 'Installation / Labor Wages'
+  | 'Freight / Transportation'
+  | 'Customer Advance Refund'
+  | 'Shop Rent / Utilities'
+  | 'Other Expenses';
+
+export interface Vendor {
+  id: string; // e.g., V202610271149
+  vendorId: string; // V20261027XXXX
+  vendorName: string; // Legal supplier / contractor name
+  amountWeOwe: number; // Float balance we owe
+  category: VendorCategory;
+  partyPhone: string;
+  targetDueDate: string; // DD/MM/YYYY (default: 15/11/2026)
+  billOrderReferenceNo: string; // PO / Invoice ref e.g. PO-8492
+  notes: string; // Particulars of consignment / work
+  billingAddress: string;
+  gstin: string;
+  pan: string;
   createdAt: string;
   updatedAt?: string;
 }
@@ -38,7 +69,7 @@ export interface QuotationItem {
 export type PdfProviderType = 'google_drive' | 'onedrive' | 'other' | 'none';
 
 export interface Quotation {
-  id: string; // e.g., Q202610094182
+  id: string; // e.g., Q202610274182
   customerId: string;
   customerExternalName: string;
   customerPhone: string;
@@ -106,13 +137,22 @@ export interface PrepaidSplits {
 export type PaymentStatus = 'PAID' | 'PARTIAL' | 'UNPAID';
 
 export interface Invoice {
-  id: string; // e.g., I202610099927
+  id: string; // e.g., I202610271001
+  invoiceId?: string;
+  customBillId?: string;
+  invoiceDate?: string; // "27/10/2026"
+  linkQuoteId?: string;
+  storeGstin?: string; // "24AAIPU5764D1ZI"
   customerId: string;
   customerExternalName: string;
   customerPhone: string;
   billingAddress: string;
   installationAddress: string;
   linkedQuoteId?: string; // Direct linked quote ID entry option
+  cloudLinking?: {
+    source: 'Google Drive' | 'OneDrive' | 'Other';
+    driveViewLinkOrId: string;
+  };
   items: InvoiceLineItem[];
   subtotal: number;
   taxAmount: number;
@@ -135,28 +175,39 @@ export interface Invoice {
   updatedAt?: string;
 }
 
-// Store Stock ONLY stores stock in store (nothing else - no godown, no shipping stock)
+// Store Stock ONLY stores stock in store
 export type StockStatus = 'AVAILABLE' | 'SOLD' | 'ARCHIVED';
+export type LeadStockState = 'ava' | 'sold' | 'achive';
 
 export interface InventoryItem {
-  id: string; // Internal document ID / SKU
-  stockId?: string; // Website unique Stock ID for this unit in store (e.g. {sr no}-{id})
-  name: string; // Product name
-  modelNo: string; // Model number / Set model
-  indoorModelNo?: string; // Indoor unit model number (IDU Model) if AC
-  outdoorModelNo?: string; // Outdoor unit model number (ODU Model) if AC
+  id: string; // STK20261027XXXX
+  stockId?: string; // STK20261027XXXX
+  sku?: string;
+  websiteStockId?: string;
+  applianceType?: 'AC' | 'Appliance' | 'TV';
+  name: string; // Product name / productFullName
+  productFullName?: string;
+  modelNo: string; // Model number / setModelNumber
+  setModelNumber?: string;
+  indoorModelNo?: string; // IDU Model
+  outdoorModelNo?: string; // ODU Model
+  indoorModel?: string;
+  outdoorModel?: string;
   type: string; // AC, TV, Refrigerator, Washing Machine, etc.
   brand: string;
-  serialNo: string; // Physical carton barcode / serial number (preserved without modification)
-  indoorUnitSerial?: string; // Indoor unit serial number (IDU) if AC
-  outdoorUnitSerial?: string; // Outdoor unit serial number (ODU) if AC
+  serialNo: string; // Physical carton barcode / serial number
+  indoorUnitSerial?: string; // IDU serial
+  outdoorUnitSerial?: string; // ODU serial
   barcode?: string; // Barcode value
-  barcodeAdded?: boolean; // Set to true when internal barcode is made/printed on physical product
-  barcodePrintedAt?: string; // Timestamp when barcode was marked as printed/added
-  status: StockStatus; // AVAILABLE, SOLD, or ARCHIVED
+  barcodeAdded?: boolean; // Set to true when internal barcode is made/printed
+  barcodePrintedAt?: string; // Timestamp when barcode was marked as printed
+  hasQrCode?: boolean;
   sellingPrice: number;
+  quantity?: number;
+  status: StockStatus; // AVAILABLE, SOLD, or ARCHIVED
+  stockState?: LeadStockState; // "ava", "sold", "achive"
   assignedInvoiceId?: string;
-  isArchived?: boolean; // Set to true when product leaves store and is delivered & installed
+  isArchived?: boolean; // Set to true when product leaves store
   archivedAt?: string;
   archivedReason?: string;
   createdAt: string;
@@ -171,6 +222,14 @@ export type ShipmentStatus =
   | 'OUT_FOR_DELIVERY'
   | 'DELIVERED_INSTALLED';
 
+export type LeadDivState =
+  | '1. Order Placed'
+  | '2. Order Confirmed'
+  | '3. In Transit'
+  | '4. Arrived at Store'
+  | '5. Out for Delivery'
+  | '6. Delivered & Installed';
+
 export interface TrackingUpdate {
   id: string;
   timestamp: string;
@@ -178,45 +237,68 @@ export interface TrackingUpdate {
   location?: string;
 }
 
+export interface ShipmentDriver {
+  driverName: string;
+  driverPhone: string;
+  vehicleNumber: string;
+  assignedAt: string;
+}
+
 export interface Shipment {
-  id: string; // e.g., D202610097103
+  id: string; // e.g., D202610271001
+  deliveryId?: string; // D20261027XXXX
+  customIdMiddleText?: string;
   invoiceId?: string; // Invoice link is OPTIONAL (single)
   invoiceIds?: string[]; // Multiple invoices can be linked later!
+  linkedInvoiceIds?: string[];
   customerId: string;
   customerExternalName: string;
+  customerName?: string;
   customerPhone: string;
   billingAddress?: string;
   deliveryAddress: string; // Delivery/installation address
   installationAddress: string;
   itemsSummary: string;
   status: ShipmentStatus;
+  divState?: LeadDivState;
   outForDeliveryEnabled: boolean;
   driverName?: string;
   driverPhone?: string;
   vehicleOrDriver?: string;
   deliveryPersonPhone?: string;
+  assignedDriver?: ShipmentDriver;
   ewayBillNo?: string;
-  storeContactPhone?: string; // Lakhi Store helpline / contact info
+  storeContactPhone?: string; // Lakhi Store helpline / contact info (+91 99980 21446)
+  storeHelpline?: string;
   liveRouteLink?: string;
   trackingUpdates: TrackingUpdate[]; // Updates that can be added
+  messageNotes?: string[];
   createdAt: string;
   updatedAt?: string;
 }
 
 export type TransactionType = 'INFLOW' | 'OUTFLOW';
 export type PaymentMode = 'UPI' | 'CARD' | 'CHEQUE_NEFT' | 'CASH' | 'BALANCE_ADJUSTMENT';
+export type LeadInflowMode = 'UPI Transfer' | 'Cash' | 'Card' | 'Bank Transfer / Cheque';
+export type LeadBankDrawer = 'HDFC Bank' | 'Main Drawer 1' | 'SBI Bank';
 export type PaymentTreatment = 'LINKED_TO_INVOICE' | 'ADDED_TO_BALANCE';
+export type LeadInflowTreatment = 'ADDED_TO_BALANCE' | 'LINK_DIRECTLY_TO_INVOICE';
 
 export interface TransactionRecord {
-  id: string; // e.g., T202610098383
+  id: string; // e.g., T202610271001
+  transId?: string;
+  transType?: 'Record Store Inflow';
   customerId: string;
   invoiceId?: string;
   type: TransactionType;
-  mode: PaymentMode;
+  mode: PaymentMode | LeadInflowMode;
+  amountInflow?: number;
+  bankDrawer?: LeadBankDrawer;
+  utrRefNoSlip?: string;
   referenceNo?: string;
   bankOrDrawer: string;
   amount: number;
-  treatment: PaymentTreatment;
+  treatment: PaymentTreatment | LeadInflowTreatment;
   notes?: string;
   createdAt: string;
 }
@@ -239,14 +321,18 @@ export interface VerificationClaim {
 export type PayableStatus = 'PENDING' | 'PAID' | 'CANCELLED';
 
 export interface PayableRecord {
-  id: string; // e.g. PAY-202610091234
+  id: string; // e.g. V202610271149
   vendorName: string; // Who we have to pay (Supplier, technician, refund, etc.)
   vendorPhone?: string;
-  category: 'SUPPLIER_STOCK' | 'FREIGHT_DELIVERY' | 'LABOR_INSTALLATION' | 'CUSTOMER_REFUND' | 'UTILITY_RENT' | 'OTHER';
+  partyPhone?: string;
+  category: VendorCategory | 'SUPPLIER_STOCK' | 'FREIGHT_DELIVERY' | 'LABOR_INSTALLATION' | 'CUSTOMER_REFUND' | 'UTILITY_RENT' | 'OTHER';
   amount: number;
+  amountWeOwe?: number;
   dueDate?: string;
+  targetDueDate?: string;
   notes?: string;
   billReference?: string;
+  billOrderReferenceNo?: string;
   status: PayableStatus;
   paidAt?: string;
   paymentMode?: PaymentMode;
@@ -256,9 +342,9 @@ export interface PayableRecord {
 }
 
 export interface BrandLogos {
-  logo1x1?: string; // App 1x1 Square Logo (Favicon, PWA icon, square avatar)
-  logoMain?: string; // Main Logo (Emblem / Graphic Symbol)
-  logoWithWordmark?: string; // Main Logo with Word "Lakhi" (Horizontal Banner Wordmark)
+  logo1x1?: string; // App 1x1 Square Logo
+  logoMain?: string; // Main Logo
+  logoWithWordmark?: string; // Main Logo with Word "Lakhi"
   updatedAt?: string;
   updatedBy?: string;
 }
@@ -277,6 +363,35 @@ export interface AdminConfig {
 export interface UserAccount {
   uid: string;
   email: string;
-  linkedCustomerIds: string[]; // customer IDs linked to this firebase account for quick sign in
+  linkedCustomerIds: string[];
   updatedAt: string;
 }
+
+// LEA-D 4.0 Master References & Full System Bundle
+export interface TallyMastersData {
+  godowns: string[];
+  stockGroups: string[];
+  unitsOfMeasure: string[];
+  banksAndCash: string[];
+  dutiesAndTaxes: string[];
+  expenseLedgers: string[];
+}
+
+export interface LeadCompleteSystemData {
+  companyInfo: {
+    companyName: string;
+    storeGstin: string;
+    storeHelpline: string;
+    baseDate: string;
+    version: string;
+  };
+  dateKey: string;
+  customers: Customer[];
+  vendors: Vendor[];
+  storeStock: InventoryItem[];
+  deliveries: Shipment[];
+  invoices: Invoice[];
+  transactions: TransactionRecord[];
+  tallyMasters: TallyMastersData;
+}
+

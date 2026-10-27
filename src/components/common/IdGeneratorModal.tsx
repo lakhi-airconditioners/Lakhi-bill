@@ -20,11 +20,13 @@ export const IdGeneratorModal: React.FC<IdGeneratorModalProps> = ({ isOpen, onCl
   if (!isOpen) return null;
 
   const typeDescriptions: Record<IdTypePrefix, { title: string; example: string }> = {
-    I: { title: 'Invoice ID', example: 'I20261012 or INV-PROJECT-A' },
-    Q: { title: 'Quotation ID', example: 'Q20261012 or QT-CLIENT-01' },
-    T: { title: 'Transaction / Ledger Inflow-Outflow', example: 'T20261012' },
-    D: { title: 'Delivery / Shipment Tracking', example: 'D20261012 or DEL-01' },
-    C: { title: 'Customer ID', example: 'C20261012 or CUST-SHARMA' },
+    I: { title: 'Invoice ID', example: 'I202610271001 or I202610279927' },
+    Q: { title: 'Quotation ID', example: 'Q202610274182 or Q202610270001' },
+    STK: { title: 'Stock / Equipment ID', example: 'STK202610271163' },
+    D: { title: 'Delivery Challan ID', example: 'D202610271001' },
+    C: { title: 'Customer ID', example: 'C202610271137' },
+    T: { title: 'Store Inflow Transaction', example: 'T202610271001' },
+    V: { title: 'Vendor / Payable ID', example: 'V202610271149' },
   };
 
   const handleGenerate = async () => {

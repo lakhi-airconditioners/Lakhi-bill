@@ -863,7 +863,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
 
     try {
-      await setDoc(doc(db, 'customers', newId), record);
+      await setDoc(doc(db, 'customers', newId), cleanFirestorePayload(record));
       return newId;
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, `customers/${newId}`);
@@ -871,13 +871,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  // Helper to remove 'undefined' fields before writing/updating in Firestore
-  const cleanFirestorePayload = <T extends Record<string, any>>(obj: T): Record<string, any> => {
+  // Deep helper to remove 'undefined' fields before writing/updating in Firestore
+  const cleanFirestorePayload = (obj: any): any => {
+    if (obj === undefined) {
+      return null;
+    }
+    if (obj === null || typeof obj !== 'object') {
+      return obj;
+    }
+    if (Array.isArray(obj)) {
+      return obj
+        .filter((item) => item !== undefined)
+        .map((item) => cleanFirestorePayload(item));
+    }
     const cleaned: Record<string, any> = {};
     Object.keys(obj).forEach((key) => {
       const val = obj[key];
       if (val !== undefined) {
-        cleaned[key] = val;
+        if (val !== null && typeof val === 'object') {
+          cleaned[key] = cleanFirestorePayload(val);
+        } else {
+          cleaned[key] = val;
+        }
       }
     });
     return cleaned;
@@ -966,7 +981,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
 
     try {
-      await setDoc(doc(db, 'quotations', newId), quote);
+      await setDoc(doc(db, 'quotations', newId), cleanFirestorePayload(quote));
       return newId;
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, `quotations/${newId}`);
@@ -1075,7 +1090,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
 
     try {
-      await setDoc(doc(db, 'invoices', newId), invoice);
+      await setDoc(doc(db, 'invoices', newId), cleanFirestorePayload(invoice));
 
       // If customer balance was applied in prepaid splits, deduct from customer account balance
       if (data.prepaidSplits.fromBalance > 0) {
@@ -1109,10 +1124,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const updateInvoice = async (id: string, data: Partial<Invoice>) => {
     try {
-      await updateDoc(doc(db, 'invoices', id), {
+      await updateDoc(doc(db, 'invoices', id), cleanFirestorePayload({
         ...data,
         updatedAt: new Date().toISOString(),
-      });
+      }));
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, `invoices/${id}`);
     }
@@ -1159,7 +1174,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
 
     try {
-      await setDoc(doc(db, 'transactions', txId), txRecord);
+      await setDoc(doc(db, 'transactions', txId), cleanFirestorePayload(txRecord));
 
       if (treatment === 'LINKED_TO_INVOICE' && inv) {
         const newTotalPrepaid = inv.totalPrepaid + amount;
@@ -1177,14 +1192,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           invoiceUpdates.paymentTransId = referenceNo.trim();
         }
 
-        await updateDoc(doc(db, 'invoices', inv.id), invoiceUpdates);
+        await updateDoc(doc(db, 'invoices', inv.id), cleanFirestorePayload(invoiceUpdates));
       } else if (treatment === 'ADDED_TO_BALANCE' && targetCustId) {
         const cust = customers.find((c) => c.id === targetCustId);
         if (cust) {
-          await updateDoc(doc(db, 'customers', cust.id), {
+          await updateDoc(doc(db, 'customers', cust.id), cleanFirestorePayload({
             accountBalance: (cust.accountBalance || 0) + amount,
             updatedAt: new Date().toISOString(),
-          });
+          }));
         }
       }
 
@@ -1238,7 +1253,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
 
     try {
-      await setDoc(doc(db, 'inventory', newSku), item);
+      await setDoc(doc(db, 'inventory', newSku), cleanFirestorePayload(item));
       return newSku;
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, `inventory/${newSku}`);
@@ -1248,11 +1263,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const markInventorySold = async (id: string, invoiceId?: string) => {
     try {
-      await updateDoc(doc(db, 'inventory', id), {
+      await updateDoc(doc(db, 'inventory', id), cleanFirestorePayload({
         status: 'SOLD',
         assignedInvoiceId: invoiceId || '',
         updatedAt: new Date().toISOString(),
-      });
+      }));
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, `inventory/${id}`);
     }
@@ -1260,13 +1275,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const archiveInventoryItem = async (id: string, reason?: string) => {
     try {
-      await updateDoc(doc(db, 'inventory', id), {
+      await updateDoc(doc(db, 'inventory', id), cleanFirestorePayload({
         status: 'ARCHIVED',
         isArchived: true,
         archivedAt: new Date().toISOString(),
         archivedReason: reason || 'Product left the store (Delivered & Installed)',
         updatedAt: new Date().toISOString(),
-      });
+      }));
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, `inventory/${id}`);
     }
@@ -1274,13 +1289,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const unarchiveInventoryItem = async (id: string) => {
     try {
-      await updateDoc(doc(db, 'inventory', id), {
+      await updateDoc(doc(db, 'inventory', id), cleanFirestorePayload({
         status: 'AVAILABLE',
         isArchived: false,
         archivedAt: deleteField(),
         archivedReason: deleteField(),
         updatedAt: new Date().toISOString(),
-      });
+      }));
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, `inventory/${id}`);
     }
@@ -1296,10 +1311,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const updateInventoryItem = async (id: string, data: Partial<InventoryItem>) => {
     try {
-      await updateDoc(doc(db, 'inventory', id), {
+      await updateDoc(doc(db, 'inventory', id), cleanFirestorePayload({
         ...data,
         updatedAt: new Date().toISOString(),
-      });
+      }));
     } catch (err) {
       handleFirestoreError(err, OperationType.UPDATE, `inventory/${id}`);
     }
@@ -1370,7 +1385,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
 
     try {
-      await setDoc(doc(db, 'shipments', newId), record);
+      await setDoc(doc(db, 'shipments', newId), cleanFirestorePayload(record));
       return newId;
     } catch (err) {
       handleFirestoreError(err, OperationType.WRITE, `shipments/${newId}`);

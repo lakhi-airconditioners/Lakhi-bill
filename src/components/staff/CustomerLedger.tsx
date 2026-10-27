@@ -19,12 +19,9 @@ import { Customer, PaymentMode, PaymentTreatment } from '../../types';
 import { getYYYYMMDD } from '../../utils/idGenerator';
 import { CustomerSelectBox } from '../common/CustomerSelectBox';
 import { CustomerModal } from '../common/CustomerModal';
+import { formatCurrency } from '../../utils/currencyHelper';
 
-interface CustomerLedgerProps {
-  onOpenTally?: (tab?: 'IMPORT' | 'EXPORT' | 'GUIDE', category?: any) => void;
-}
-
-export const CustomerLedger: React.FC<CustomerLedgerProps> = ({ onOpenTally }) => {
+export const CustomerLedger: React.FC = () => {
   const { customers, transactions, invoices, addCustomer, recordPaymentForInvoice, changeCustomerPin } =
     useApp();
 
@@ -173,16 +170,6 @@ export const CustomerLedger: React.FC<CustomerLedgerProps> = ({ onOpenTally }) =
             <Wallet className="w-4 h-4" />
             + Record Ledger Trans (T...)
           </button>
-          {onOpenTally && (
-            <button
-              onClick={() => onOpenTally('IMPORT', 'CUSTOMERS')}
-              className="flex items-center gap-1.5 px-3.5 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl transition-colors shadow-xs"
-              title="Import Sundry Debtors & Customer Ledgers from Tally Prime XML"
-            >
-              <FileSpreadsheet className="w-4 h-4 text-blue-200" />
-              <span>Import Tally Debtors</span>
-            </button>
-          )}
           <button
             onClick={() => {
               resetCustomerForm();

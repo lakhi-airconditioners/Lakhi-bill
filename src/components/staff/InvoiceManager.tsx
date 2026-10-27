@@ -41,6 +41,7 @@ import { stripRandomSuffix, buildCustomIdPreview, formatCustomIdValue } from '..
 import { CloudPdfLinkSelector } from '../common/CloudPdfLinkSelector';
 import { CustomerModal } from '../common/CustomerModal';
 import { CustomerSelectBox } from '../common/CustomerSelectBox';
+import { formatCurrency } from '../../utils/currencyHelper';
 
 interface InvoiceManagerProps {
   initialQuoteToConvert?: Quotation | null;
@@ -48,7 +49,6 @@ interface InvoiceManagerProps {
   initialStockItemToBill?: any | null;
   onClearInitialStock?: () => void;
   onOpenNewShipmentForInvoice?: (invoice: Invoice) => void;
-  onOpenTally?: (tab?: 'IMPORT' | 'EXPORT' | 'GUIDE', category?: any) => void;
 }
 
 export const InvoiceManager: React.FC<InvoiceManagerProps> = ({
@@ -57,7 +57,6 @@ export const InvoiceManager: React.FC<InvoiceManagerProps> = ({
   initialStockItemToBill,
   onClearInitialStock,
   onOpenNewShipmentForInvoice,
-  onOpenTally,
 }) => {
   const {
     invoices,
@@ -852,16 +851,6 @@ export const InvoiceManager: React.FC<InvoiceManagerProps> = ({
         </div>
 
         <div className="flex items-center gap-2 self-start sm:self-auto flex-wrap">
-          {onOpenTally && (
-            <button
-              onClick={() => onOpenTally('EXPORT', 'INVOICES')}
-              className="px-3.5 py-2.5 bg-slate-900 hover:bg-black dark:bg-slate-800 dark:hover:bg-slate-700 text-white rounded-xl text-xs font-bold shadow-xs flex items-center gap-1.5 transition-all border border-slate-700/60"
-              title="Export/Sync Invoices with Tally Prime XML (Vouchers)"
-            >
-              <FileSpreadsheet className="w-4 h-4 text-emerald-400" />
-              <span>Tally Prime Sync</span>
-            </button>
-          )}
           <button
             onClick={() => setIsCreateOpen(true)}
             className="px-4 py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-xl text-xs font-bold shadow-sm shadow-red-600/30 flex items-center gap-1.5 transition-colors"

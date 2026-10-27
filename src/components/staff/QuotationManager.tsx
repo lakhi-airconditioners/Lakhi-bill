@@ -30,6 +30,7 @@ import { stripRandomSuffix, buildCustomIdPreview, formatCustomIdValue } from '..
 import { CustomerModal } from '../common/CustomerModal';
 import { CustomerSelectBox } from '../common/CustomerSelectBox';
 import { AiQuotationBuilderModal } from './AiQuotationBuilderModal';
+import { formatCurrency } from '../../utils/currencyHelper';
 
 interface QuotationManagerProps {
   onConvertToInvoice?: (quote: Quotation) => void;

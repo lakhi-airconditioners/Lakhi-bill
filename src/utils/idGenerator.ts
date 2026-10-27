@@ -13,9 +13,11 @@ export interface IdGeneratorOptions {
 const COLLECTION_MAP: Record<IdTypePrefix, string> = {
   I: 'invoices',
   Q: 'quotations',
-  T: 'transactions',
+  STK: 'inventory',
   D: 'shipments',
   C: 'customers',
+  T: 'transactions',
+  V: 'payables',
 };
 
 /**

@@ -1,299 +1,82 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef } from 'react';
 import {
   FileSpreadsheet,
   Download,
   Upload,
+  Database,
+  Users,
+  FileCode,
+  FileText,
+  Zap,
   CheckCircle2,
   AlertCircle,
-  HelpCircle,
-  Check,
-  Copy,
-  ExternalLink,
-  Database,
-  BookOpen,
-  Layers,
-  RefreshCw,
-  FileCode,
-  Table,
-  Filter,
-  Search,
-  Users,
-  Boxes,
-  Receipt,
-  FileText,
-  ChevronRight,
-  ArrowRight,
-  Info,
-  Calendar,
-  Sparkles,
   Truck,
-  Scale,
+  Receipt,
+  Package,
+  Layers,
+  Calendar,
+  DollarSign,
+  ArrowRight,
   ShieldCheck,
-  HardDrive,
-  Share2,
-  Eye,
-  EyeOff,
-  Terminal,
-  Building2,
-  Link2,
-  PackageCheck,
-  SlidersHorizontal,
-  Zap,
+  Building,
 } from 'lucide-react';
 import { useApp } from '../../context/AppContext';
-import { Customer } from '../../types';
 import {
-  parseTallyXmlData,
-  parseTallyCsvData,
-  generateTallyCustomersXml,
-  generateTallyInventoryXml,
-  generateTallyInvoicesXml,
-  generateCustomersCsv,
-  generateInventoryCsv,
-  generateInvoicesCsv,
-  generateQuotationsCsv,
-  generateShipmentsCsv,
-  generateDuesKhataCsv,
-  generateFullErpBackupJson,
-  SAMPLE_TALLY_CUSTOMERS_XML,
-  SAMPLE_TALLY_INVENTORY_XML,
-  SAMPLE_TALLY_MASTERS_AND_TRANSACTIONS_XML,
-  SAMPLE_TALLY_ALL_MASTERS_XML,
-  ParsedTallyCustomer,
-  ParsedTallyStockItem,
-  ParsedTallyInvoice,
-  ParsedTallyMasterSummary,
-  TallyParseStats,
-} from '../../utils/tallyHelper';
+  normalizeTallyToLeadData,
+  generateLeadCompleteSystemTxt,
+  generateLeadCompleteSystemJs,
+  STORE_CONSTANTS,
+} from '../../utils/leadNormalizationService';
+import { formatCurrency } from '../../utils/currencyHelper';
+import { LeadCompleteSystemData } from '../../types';
 
-export type TallyCategory =
-  | 'CUSTOMERS'
-  | 'DEALERS'
-  | 'INVENTORY'
-  | 'INVOICES'
-  | 'DELIVERY_NOTES'
-  | 'QUOTATIONS'
-  | 'SHIPMENTS'
-  | 'KHATA'
-  | 'BACKUP';
+export const TallyPrimeManager: React.FC = () => {
+  const { addCustomer, addInventoryItem, addPayable, createAnyDocument } = useApp();
 
-export type GuideCategory =
-  | 'CUSTOMERS'
-  | 'DEALERS'
-  | 'INVENTORY'
-  | 'INVOICES'
-  | 'DELIVERY_NOTES'
-  | 'QUOTATIONS'
-  | 'SHIPMENTS'
-  | 'KHATA'
-  | 'BACKUP'
-  | 'IMPORT_TO_TALLY';
+  const [wizardStep, setWizardStep] = useState<1 | 2 | 3>(1);
 
-export interface TallyPrimeManagerProps {
-  initialTab?: 'IMPORT' | 'EXPORT' | 'GUIDE';
-  initialCategory?: TallyCategory;
-}
-
-export const TallyPrimeManager: React.FC<TallyPrimeManagerProps> = ({
-  initialTab = 'IMPORT',
-  initialCategory = 'CUSTOMERS',
-}) => {
-  const {
-    customers,
-    inventory,
-    invoices,
-    quotations,
-    shipments,
-    payables,
-    addCustomer,
-    updateCustomer,
-    addInventoryItem,
-    addInvoice,
-    addPayable,
-    createAnyDocument,
-    updateAnyDocument,
-    gstNumber,
-  } = useApp();
-
-  // Active top navigation tab: 'IMPORT' | 'EXPORT' | 'GUIDE'
-  const [activeTab, setActiveTab] = useState<'IMPORT' | 'EXPORT' | 'GUIDE'>(initialTab);
-
-  // Category filter
-  const [selectedCategory, setSelectedCategory] = useState<TallyCategory>(initialCategory);
-
-  // Import Mode Strategy: 'MERGE' (Auto-Detect & Merge) vs 'REPLACE' (Overwrite Existing Data)
-  const [importStrategy, setImportStrategy] = useState<'MERGE' | 'REPLACE'>('MERGE');
-
-  // Sync when initialTab or initialCategory change
-  useEffect(() => {
-    if (initialTab) {
-      setActiveTab(initialTab);
-    }
-  }, [initialTab]);
-
-  useEffect(() => {
-    if (initialCategory) {
-      setSelectedCategory(initialCategory);
-      setActiveGuideCategory(initialCategory as GuideCategory);
-    }
-  }, [initialCategory]);
-
-  // ==========================================
-  // IMPORT STATE
-  // ==========================================
   const [dragOver, setDragOver] = useState(false);
   const [uploadedFileName, setUploadedFileName] = useState<string | null>(null);
   const [fileContentRaw, setFileContentRaw] = useState<string>('');
-  const [isReadingFile, setIsReadingFile] = useState(false);
-  const [parseStats, setParseStats] = useState<TallyParseStats | null>(null);
-  const [showRawInspector, setShowRawInspector] = useState(false);
-  const [parseWarnings, setParseWarnings] = useState<string[]>([]);
-  const [rawSampleLines, setRawSampleLines] = useState<string[]>([]);
-  const [forcedDelimiter, setForcedDelimiter] = useState<string>('auto');
+  const [leadNormalizedData, setLeadNormalizedData] = useState<LeadCompleteSystemData | null>(null);
 
-  const [parsedMasterSummary, setParsedMasterSummary] = useState<ParsedTallyMasterSummary | null>(null);
-  const [parsedCustomers, setParsedCustomers] = useState<ParsedTallyCustomer[]>([]);
-  const [parsedDealers, setParsedDealers] = useState<ParsedTallyCustomer[]>([]);
-  const [parsedStock, setParsedStock] = useState<ParsedTallyStockItem[]>([]);
-  const [parsedInvoices, setParsedInvoices] = useState<ParsedTallyInvoice[]>([]);
-  const [parsedDeliveryNotes, setParsedDeliveryNotes] = useState<ParsedTallyInvoice[]>([]);
+  // Active sub-tab in Step 2 Review Data
+  const [reviewTab, setReviewTab] = useState<
+    'invoices' | 'deliveries' | 'inflows' | 'customers' | 'vendors' | 'stock'
+  >('invoices');
 
-  const [selectedItemIndices, setSelectedItemIndices] = useState<number[]>([]);
-  const [isImporting, setIsImporting] = useState(false);
-  const [importSuccessMessage, setImportSuccessMessage] = useState<string | null>(null);
-  const [importErrorMessage, setImportErrorMessage] = useState<string | null>(null);
+  // Sync / Ingestion state
+  const [isSyncing, setIsSyncing] = useState(false);
+  const [syncProgressText, setSyncProgressText] = useState<string>('');
+  const [syncProgressPercent, setSyncProgressPercent] = useState<number>(0);
+  const [syncSuccessMessage, setSyncSuccessMessage] = useState<string | null>(null);
+  const [syncErrorMessage, setSyncErrorMessage] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // ==========================================
-  // EXPORT STATE
-  // ==========================================
-  const [exportFormat, setExportFormat] = useState<'XML' | 'CSV'>('XML');
-  const [exportCopied, setExportCopied] = useState(false);
-  const [exportSearch, setExportSearch] = useState('');
-
-  // ==========================================
-  // GUIDE STATE
-  // ==========================================
-  const [activeGuideCategory, setActiveGuideCategory] = useState<GuideCategory>('CUSTOMERS');
-
-  // Process uploaded file (XML or CSV/TSV)
-  const processRawFileText = (text: string, filename: string, delimiterOverride?: string) => {
+  // Processing incoming file
+  const processLeadFileText = (text: string, filename: string) => {
     setUploadedFileName(filename);
     setFileContentRaw(text);
-    setImportErrorMessage(null);
-    setImportSuccessMessage(null);
+    setSyncErrorMessage(null);
+    setSyncSuccessMessage(null);
 
-    const isXml = filename.toLowerCase().endsWith('.xml') || text.trim().startsWith('<');
-
-if (isXml) {
-      const parsed = parseTallyXmlData(text, customers);
-      setParsedMasterSummary(parsed.masters);
-      setParsedCustomers(parsed.customers);
-      setParsedDealers(parsed.dealers);
-      setParsedStock(parsed.stockItems);
-      setParsedInvoices(parsed.invoices);
-      setParsedDeliveryNotes(parsed.deliveryNotes);
-      setParseStats(parsed.stats);
-      setParseWarnings(parsed.warnings);
-      setRawSampleLines(parsed.rawSampleLines);
-
-      // FIX: Check if the currently selected category has items; keep it if it does!
-      const currentCount = getActiveCategoryCount(selectedCategory, parsed);
-      if (currentCount > 0) {
-        setSelectedItemIndices(Array.from({ length: currentCount }, (_, i) => i));
-      } else if (parsed.deliveryNotes.length > 0) {
-        setSelectedCategory('DELIVERY_NOTES');
-        setSelectedItemIndices(parsed.deliveryNotes.map((_, i) => i));
-      } else if (parsed.invoices.length > 0) {
-        setSelectedCategory('INVOICES');
-        setSelectedItemIndices(parsed.invoices.map((_, i) => i));
-      } else if (parsed.customers.length > 0) {
-        setSelectedCategory('CUSTOMERS');
-        setSelectedItemIndices(parsed.customers.map((_, i) => i));
-      } else if (parsed.dealers.length > 0) {
-        setSelectedCategory('DEALERS');
-        setSelectedItemIndices(parsed.dealers.map((_, i) => i));
-      } else if (parsed.stockItems.length > 0) {
-        setSelectedCategory('INVENTORY');
-        setSelectedItemIndices(parsed.stockItems.map((_, i) => i));
-      } else {
-        setSelectedItemIndices([]);
-      }
-
-      if (parsed.stats.totalFound === 0) {
-        setImportErrorMessage(
-          `File loaded (${(parsed.stats.fileSizeBytes / 1024).toFixed(1)} KB), but 0 Tally records were detected. See diagnostic details below.`
-        );
-      }
-    } else {
-      // CSV / TSV format
-      const effDelim = delimiterOverride && delimiterOverride !== 'auto' ? delimiterOverride : undefined;
-      const csvCategory =
-        selectedCategory === 'INVENTORY' || selectedCategory === 'INVOICES' || selectedCategory === 'DELIVERY_NOTES' || selectedCategory === 'DEALERS'
-          ? selectedCategory
-          : 'CUSTOMERS';
-      const parsed = parseTallyCsvData(text, csvCategory, effDelim, customers);
-      setParsedCustomers(parsed.customers);
-      setParsedDealers(parsed.dealers);
-      setParsedStock(parsed.stockItems);
-      setParsedInvoices(parsed.invoices);
-      setParsedDeliveryNotes(parsed.deliveryNotes);
-      setParseStats(parsed.stats);
-      setParseWarnings(parsed.warnings);
-      setRawSampleLines(parsed.rawSampleLines);
-
-      const count = getActiveCategoryCount(selectedCategory, parsed);
-      setSelectedItemIndices(Array.from({ length: count }, (_, i) => i));
-
-      if (parsed.stats.totalFound === 0) {
-        setImportErrorMessage(
-          `File loaded (${(parsed.stats.fileSizeBytes / 1024).toFixed(1)} KB), but 0 records were parsed. Try switching delimiter or category below.`
-        );
-      }
-    }
-  };
-
-  const getActiveCategoryCount = (cat: TallyCategory, parsed?: any) => {
-    const custs = parsed ? parsed.customers : parsedCustomers;
-    const dlrs = parsed ? parsed.dealers : parsedDealers;
-    const stck = parsed ? parsed.stockItems : parsedStock;
-    const invs = parsed ? parsed.invoices : parsedInvoices;
-    const deliv = parsed ? parsed.deliveryNotes : parsedDeliveryNotes;
-
-    switch (cat) {
-      case 'CUSTOMERS':
-        return custs.length;
-      case 'DEALERS':
-        return dlrs.length;
-      case 'INVENTORY':
-        return stck.length;
-      case 'INVOICES':
-        return invs.length;
-      case 'DELIVERY_NOTES':
-        return deliv.length;
-      default:
-        return 0;
-    }
+    const leadNormalized = normalizeTallyToLeadData(text);
+    setLeadNormalizedData(leadNormalized);
   };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    setIsReadingFile(true);
-    setImportErrorMessage(null);
-    setImportSuccessMessage(null);
+    setSyncErrorMessage(null);
+    setSyncSuccessMessage(null);
     const reader = new FileReader();
     reader.onload = (event) => {
       const text = event.target?.result as string;
-      setTimeout(() => {
-        processRawFileText(text, file.name);
-        setIsReadingFile(false);
-      }, 50);
+      processLeadFileText(text, file.name);
     };
     reader.onerror = () => {
-      setImportErrorMessage('Could not read file from system.');
-      setIsReadingFile(false);
+      setSyncErrorMessage('Could not read LA-D file from system.');
     };
     reader.readAsText(file);
     e.target.value = '';
@@ -305,1554 +88,766 @@ if (isXml) {
     const file = e.dataTransfer.files?.[0];
     if (!file) return;
 
-    setIsReadingFile(true);
-    setImportErrorMessage(null);
-    setImportSuccessMessage(null);
+    setSyncErrorMessage(null);
+    setSyncSuccessMessage(null);
     const reader = new FileReader();
     reader.onload = (event) => {
       const text = event.target?.result as string;
-      setTimeout(() => {
-        processRawFileText(text, file.name);
-        setIsReadingFile(false);
-      }, 50);
+      processLeadFileText(text, file.name);
     };
     reader.onerror = () => {
-      setImportErrorMessage('Could not read dropped file.');
-      setIsReadingFile(false);
+      setSyncErrorMessage('Could not read dropped file.');
     };
     reader.readAsText(file);
   };
 
-  // Load sample data for immediate test drive
-  const handleLoadSample = (cat: TallyCategory | 'ALL' | 'ALL_MASTERS') => {
-    if (cat === 'ALL_MASTERS') {
-      setSelectedCategory('CUSTOMERS');
-      processRawFileText(SAMPLE_TALLY_ALL_MASTERS_XML, 'sample_tally_all_masters.xml');
-    } else if (cat === 'ALL') {
-      processRawFileText(SAMPLE_TALLY_MASTERS_AND_TRANSACTIONS_XML, 'sample_tally_masters_and_transactions.xml');
-    } else if (cat === 'CUSTOMERS' || cat === 'DEALERS') {
-      setSelectedCategory('CUSTOMERS');
-      processRawFileText(SAMPLE_TALLY_CUSTOMERS_XML, 'sample_tally_customers.xml');
-    } else if (cat === 'INVENTORY') {
-      setSelectedCategory('INVENTORY');
-      processRawFileText(SAMPLE_TALLY_INVENTORY_XML, 'sample_tally_inventory.xml');
-    }
-  };
+  const currentData: LeadCompleteSystemData =
+    leadNormalizedData || normalizeTallyToLeadData(fileContentRaw || '');
 
-  // Select / deselect all
-  const activeParsedCount = getActiveCategoryCount(selectedCategory);
+  // Commit and Upsert Data to Store with Live Progress Bar
+  const handleCommitToStore = async () => {
+    setIsSyncing(true);
+    setSyncErrorMessage(null);
+    setSyncSuccessMessage(null);
+    setSyncProgressPercent(0);
 
-  const handleToggleSelectAll = () => {
-    if (selectedItemIndices.length === activeParsedCount) {
-      setSelectedItemIndices([]);
-    } else {
-      setSelectedItemIndices(Array.from({ length: activeParsedCount }, (_, i) => i));
-    }
-  };
+    const totalItems =
+      currentData.customers.length +
+      currentData.vendors.length +
+      currentData.storeStock.length +
+      currentData.invoices.length +
+      currentData.deliveries.length +
+      currentData.transactions.length;
 
-  const handleToggleSingle = (idx: number) => {
-    if (selectedItemIndices.includes(idx)) {
-      setSelectedItemIndices(selectedItemIndices.filter((i) => i !== idx));
-    } else {
-      setSelectedItemIndices([...selectedItemIndices, idx]);
-    }
-  };
-
-  // Execute Smart Import to Firestore Database
-  const handleExecuteImport = async () => {
-    if (selectedItemIndices.length === 0) {
-      setImportErrorMessage('Please select at least one record to import.');
+    if (totalItems === 0) {
+      setSyncErrorMessage('No items to sync in the ingested dataset.');
+      setIsSyncing(false);
       return;
     }
 
-    setIsImporting(true);
-    setImportErrorMessage(null);
-    setImportSuccessMessage(null);
+    let processedCount = 0;
+
+    const updateProgress = (message: string) => {
+      processedCount++;
+      const pct = Math.min(100, Math.round((processedCount / totalItems) * 100));
+      setSyncProgressPercent(pct);
+      setSyncProgressText(message);
+    };
 
     try {
-      let importedCount = 0;
-      let mergedCount = 0;
-      let replacedCount = 0;
-      let billsCreatedCount = 0;
-      let shipmentsCreatedCount = 0;
-      let payablesCreatedCount = 0;
-
-      // 1. CUSTOMERS (Sundry Debtors)
-      if (selectedCategory === 'CUSTOMERS') {
-        for (const idx of selectedItemIndices) {
-          const item = parsedCustomers[idx];
-          if (!item) continue;
-
-          let effectiveCustId = item.existingMatchId;
-
-          if (effectiveCustId) {
-            if (importStrategy === 'MERGE') {
-              const mergePayload: Partial<Customer> = {
-                notes: `Tally Merged (${new Date().toLocaleDateString()}): ${item.notes || ''}`,
-              };
-              if (item.phone) mergePayload.phone = item.phone;
-              if (item.email) mergePayload.email = item.email;
-              if (item.billingAddress) mergePayload.billingAddress = item.billingAddress;
-              if (item.gstin) mergePayload.gstin = item.gstin;
-              if (item.accountBalance !== undefined) mergePayload.accountBalance = item.accountBalance;
-
-              await updateCustomer(effectiveCustId, mergePayload);
-              mergedCount++;
-            } else {
-              // REPLACE
-              await updateCustomer(effectiveCustId, {
-                externalName: item.externalName || 'Customer',
-                phone: item.phone || '',
-                email: item.email || '',
-                billingAddress: item.billingAddress || '',
-                installationAddress: item.installationAddress || item.billingAddress || '',
-                gstin: item.gstin || '',
-                accountBalance: item.accountBalance || 0,
-                notes: `Replaced from Tally Prime Export (${new Date().toLocaleDateString()})`,
-              });
-              replacedCount++;
-            }
-          } else {
-            effectiveCustId = await addCustomer({
-              externalName: item.externalName || 'Customer',
-              phone: item.phone || '',
-              email: item.email || '',
-              billingAddress: item.billingAddress || '',
-              installationAddress: item.installationAddress || item.billingAddress || '',
-              gstin: item.gstin || '',
-              accountBalance: item.accountBalance || 0,
-              notes: item.notes || 'Imported from Tally Prime',
-            });
-            importedCount++;
-          }
-
-          if (!effectiveCustId) continue;
-
-          // A) Auto-create Invoices from Bill Allocations detected on Customer Ledger
-          if (item.billAllocations && item.billAllocations.length > 0) {
-            for (let bIdx = 0; bIdx < item.billAllocations.length; bIdx++) {
-              const b = item.billAllocations[bIdx];
-              const cleanBillName = b.billName.trim();
-              if (!cleanBillName) continue;
-
-              const existingBill = invoices.find(
-                (inv) =>
-                  (inv.customerId === effectiveCustId ||
-                    (inv.customerExternalName && inv.customerExternalName.toLowerCase() === item.externalName.toLowerCase())) &&
-                  (inv.id === cleanBillName || (inv.notes && inv.notes.includes(cleanBillName)))
-              );
-
-              if (!existingBill) {
-                // Check if a detailed voucher exists in parsedInvoices for this bill name
-                const detailedVoucher = parsedInvoices.find(
-                  (vch) => vch.invoiceNumber.toLowerCase() === cleanBillName.toLowerCase()
-                );
-
-                if (detailedVoucher) {
-                  const subtotal = detailedVoucher.taxableAmount || detailedVoucher.totalAmount / 1.18;
-                  const taxAmount =
-                    detailedVoucher.cgstAmount && detailedVoucher.sgstAmount
-                      ? detailedVoucher.cgstAmount + detailedVoucher.sgstAmount + (detailedVoucher.igstAmount || 0)
-                      : detailedVoucher.totalAmount - subtotal;
-
-                  await addInvoice(
-                    {
-                      customerId: effectiveCustId,
-                      customerExternalName: item.externalName,
-                      customerPhone: item.phone || detailedVoucher.customerPhone || '9800000000',
-                      billingAddress: item.billingAddress || detailedVoucher.billingAddress || 'Store Pickup',
-                      installationAddress: item.installationAddress || item.billingAddress || 'Store Pickup',
-                      items: detailedVoucher.items.map((it, itIdx) => ({
-                        id: `inv-it-${Date.now()}-${itIdx}`,
-                        name: it.name,
-                        modelNo: it.modelNo || 'STANDARD',
-                        indoorModelNo: it.indoorModelNo,
-                        outdoorModelNo: it.outdoorModelNo,
-                        indoorUnitSerial: it.indoorUnitSerial,
-                        outdoorUnitSerial: it.outdoorUnitSerial,
-                        serialNo: it.serialNo,
-                        type: 'AC',
-                        brand: 'Daikin',
-                        quantity: it.quantity,
-                        rate: it.rate,
-                        taxPercent: 18,
-                        isAmountWithTax: true,
-                        discount: 0,
-                        lineTotal: it.amount,
-                      })),
-                      subtotal,
-                      taxAmount,
-                      discountAmount: 0,
-                      totalAmount: detailedVoucher.totalAmount,
-                      prepaidSplits: {
-                        fromBalance: 0,
-                        upi: { amount: 0, receivingBank: '', utr: '' },
-                        card: { amount: 0, receivingBank: '', authId: '' },
-                        chequeOrNeft: { amount: 0, chequeOrSlipOrUtr: '', bank: '' },
-                        cash: { amount: 0, drawerRegister: '' },
-                      },
-                      totalPrepaid: 0,
-                      amountDue: detailedVoucher.totalAmount,
-                      paymentStatus: 'UNPAID',
-                      notes: detailedVoucher.narration || `Imported from Tally Prime Voucher #${detailedVoucher.invoiceNumber}`,
-                    },
-                    detailedVoucher.invoiceNumber
-                  );
-                } else {
-                  // Standard opening bill allocation invoice
-                  await addInvoice(
-                    {
-                      customerId: effectiveCustId,
-                      customerExternalName: item.externalName,
-                      customerPhone: item.phone || '9800000000',
-                      billingAddress: item.billingAddress || 'Store Pickup',
-                      installationAddress: item.installationAddress || item.billingAddress || 'Store Pickup',
-                      items: [
-                        {
-                          id: `bill-it-${Date.now()}-${bIdx}`,
-                          name: `Outstanding Bill / Tally Allocation: ${cleanBillName}`,
-                          modelNo: 'TALLY-OPENING-BILL',
-                          type: 'AC',
-                          brand: 'Daikin',
-                          quantity: 1,
-                          rate: b.amount,
-                          taxPercent: 0,
-                          isAmountWithTax: true,
-                          discount: 0,
-                          lineTotal: b.amount,
-                        },
-                      ],
-                      subtotal: b.amount,
-                      taxAmount: 0,
-                      discountAmount: 0,
-                      totalAmount: b.amount,
-                      prepaidSplits: {
-                        fromBalance: 0,
-                        upi: { amount: 0, receivingBank: '', utr: '' },
-                        card: { amount: 0, receivingBank: '', authId: '' },
-                        chequeOrNeft: { amount: 0, chequeOrSlipOrUtr: '', bank: '' },
-                        cash: { amount: 0, drawerRegister: '' },
-                      },
-                      totalPrepaid: 0,
-                      amountDue: b.amount,
-                      paymentStatus: 'UNPAID',
-                      notes: `Auto-created from Tally Customer Bill Allocation: ${cleanBillName}`,
-                    },
-                    cleanBillName
-                  );
-                }
-                billsCreatedCount++;
-              }
-            }
-          }
-
-          // B) Auto-create Invoices from parsed Vouchers in the XML file for this customer
-          const matchedVouchers = parsedInvoices.filter(
-            (vch) =>
-              (vch.customerName && vch.customerName.toLowerCase() === item.externalName.toLowerCase()) ||
-              (item.gstin && vch.gstin && vch.gstin.toLowerCase() === item.gstin.toLowerCase()) ||
-              vch.matchedCustomerId === effectiveCustId
-          );
-
-          for (const vch of matchedVouchers) {
-            const existingInv = invoices.find(
-              (inv) => inv.id === vch.invoiceNumber || (inv.notes && inv.notes.includes(vch.invoiceNumber))
-            );
-
-            if (!existingInv) {
-              const subtotal = vch.taxableAmount || vch.totalAmount / 1.18;
-              const taxAmount =
-                vch.cgstAmount && vch.sgstAmount
-                  ? vch.cgstAmount + vch.sgstAmount + (vch.igstAmount || 0)
-                  : vch.totalAmount - subtotal;
-
-              await addInvoice(
-                {
-                  customerId: effectiveCustId,
-                  customerExternalName: item.externalName,
-                  customerPhone: item.phone || vch.customerPhone || '9800000000',
-                  billingAddress: item.billingAddress || vch.billingAddress || 'Store Pickup',
-                  installationAddress: item.installationAddress || item.billingAddress || 'Store Pickup',
-                  items: vch.items.map((it, itIdx) => ({
-                    id: `inv-it-${Date.now()}-${itIdx}`,
-                    name: it.name,
-                    modelNo: it.modelNo || 'STANDARD',
-                    indoorModelNo: it.indoorModelNo,
-                    outdoorModelNo: it.outdoorModelNo,
-                    indoorUnitSerial: it.indoorUnitSerial,
-                    outdoorUnitSerial: it.outdoorUnitSerial,
-                    serialNo: it.serialNo,
-                    type: 'AC',
-                    brand: 'Daikin',
-                    quantity: it.quantity,
-                    rate: it.rate,
-                    taxPercent: 18,
-                    isAmountWithTax: true,
-                    discount: 0,
-                    lineTotal: it.amount,
-                  })),
-                  subtotal,
-                  taxAmount,
-                  discountAmount: 0,
-                  totalAmount: vch.totalAmount,
-                  prepaidSplits: {
-                    fromBalance: 0,
-                    upi: { amount: 0, receivingBank: '', utr: '' },
-                    card: { amount: 0, receivingBank: '', authId: '' },
-                    chequeOrNeft: { amount: 0, chequeOrSlipOrUtr: '', bank: '' },
-                    cash: { amount: 0, drawerRegister: '' },
-                  },
-                  totalPrepaid: 0,
-                  amountDue: vch.totalAmount,
-                  paymentStatus: 'UNPAID',
-                  notes: vch.narration || `Imported from Tally Prime Voucher #${vch.invoiceNumber}`,
-                },
-                vch.invoiceNumber
-              );
-              billsCreatedCount++;
-            }
-          }
-
-          // C) Auto-create Delivery Notes (Shipments) for this customer if present in XML
-          const matchedDeliveryNotes = parsedDeliveryNotes.filter(
-            (del) =>
-              (del.customerName && del.customerName.toLowerCase() === item.externalName.toLowerCase()) ||
-              (item.gstin && del.gstin && del.gstin.toLowerCase() === item.gstin.toLowerCase()) ||
-              del.matchedCustomerId === effectiveCustId
-          );
-
-          for (const del of matchedDeliveryNotes) {
-            const existingShip = shipments.find(
-              (s) => s.id === del.invoiceNumber || s.trackingUpdates?.some((t) => t.message.includes(del.invoiceNumber))
-            );
-
-            if (!existingShip) {
-              const itemsSummary = del.items
-                .map(
-                  (it) =>
-                    `${it.name} (Qty: ${it.quantity}${it.indoorUnitSerial ? `, IDU: ${it.indoorUnitSerial}` : ''}${
-                      it.outdoorUnitSerial ? `, ODU: ${it.outdoorUnitSerial}` : ''
-                    })`
-                )
-                .join(' | ');
-
-              await createAnyDocument(
-                'shipments',
-                {
-                  customerId: effectiveCustId,
-                  customerExternalName: item.externalName,
-                  customerPhone: item.phone || del.customerPhone || '9800000000',
-                  deliveryAddress: item.billingAddress || del.billingAddress || 'Delivery Location',
-                  installationAddress: item.installationAddress || item.billingAddress || 'Delivery Location',
-                  itemsSummary,
-                  status: 'ORDER_PLACED',
-                  outForDeliveryEnabled: false,
-                  trackingUpdates: [
-                    {
-                      id: `trk-${Date.now()}`,
-                      timestamp: new Date().toISOString(),
-                      message: `Imported from Tally Delivery Note Challan #${del.invoiceNumber}`,
-                    },
-                  ],
-                  createdAt: new Date().toISOString(),
-                },
-                del.invoiceNumber
-              );
-              shipmentsCreatedCount++;
-            }
-          }
-        }
-      }
-      // 2. DEALERS / SUPPLIERS (Sundry Creditors)
-      else if (selectedCategory === 'DEALERS') {
-        for (const idx of selectedItemIndices) {
-          const item = parsedDealers[idx];
-          if (!item) continue;
-
-          let effectiveCustId = item.existingMatchId;
-
-          if (effectiveCustId) {
-            if (importStrategy === 'MERGE') {
-              const mergePayload: Partial<Customer> = {
-                notes: `Dealer Supplier Merged (${new Date().toLocaleDateString()}): ${item.notes || ''}`,
-              };
-              if (item.phone) mergePayload.phone = item.phone;
-              if (item.email) mergePayload.email = item.email;
-              if (item.billingAddress) mergePayload.billingAddress = item.billingAddress;
-              if (item.gstin) mergePayload.gstin = item.gstin;
-              if (item.accountBalance !== undefined) mergePayload.accountBalance = -Math.abs(item.accountBalance);
-
-              await updateCustomer(effectiveCustId, mergePayload);
-              mergedCount++;
-            } else {
-              await updateCustomer(effectiveCustId, {
-                externalName: item.externalName || 'Dealer Supplier',
-                phone: item.phone || '',
-                email: item.email || '',
-                billingAddress: item.billingAddress || '',
-                gstin: item.gstin || '',
-                accountBalance: item.accountBalance ? -Math.abs(item.accountBalance) : 0,
-                notes: `Dealer Supplier Replaced from Tally (${new Date().toLocaleDateString()})`,
-              });
-              replacedCount++;
-            }
-          } else {
-            effectiveCustId = await addCustomer({
-              externalName: item.externalName || 'Dealer Supplier',
-              internalName: `Dealer / Supplier (${item.tallyParent || 'Sundry Creditors'})`,
-              phone: item.phone || '',
-              email: item.email || '',
-              billingAddress: item.billingAddress || '',
-              installationAddress: item.billingAddress || '',
-              gstin: item.gstin || '',
-              accountBalance: item.accountBalance ? -Math.abs(item.accountBalance) : 0,
-              notes: item.notes || 'Imported from Tally Prime Sundry Creditors',
-            });
-            importedCount++;
-          }
-
-          // Auto-create Vendor Payables for Dealer Bill Allocations
-          if (item.billAllocations && item.billAllocations.length > 0) {
-            for (const b of item.billAllocations) {
-              const cleanBillName = b.billName.trim();
-              if (!cleanBillName) continue;
-
-              const existingPayable = payables.find(
-                (p) => p.billReference === cleanBillName || (p.notes && p.notes.includes(cleanBillName))
-              );
-
-              if (!existingPayable) {
-                await addPayable({
-                  vendorName: item.externalName,
-                  vendorPhone: item.phone,
-                  billReference: cleanBillName,
-                  amount: b.amount,
-                  category: 'SUPPLIER_STOCK',
-                  notes: `Auto-created from Tally Dealer Bill Allocation: ${cleanBillName}${item.gstin ? ` (GSTIN: ${item.gstin})` : ''}`,
-                  status: 'PENDING',
-                });
-                payablesCreatedCount++;
-              }
-            }
-          }
-        }
-      }
-      // 3. INVENTORY & AC STOCK
-      else if (selectedCategory === 'INVENTORY') {
-        for (const idx of selectedItemIndices) {
-          const item = parsedStock[idx];
-          if (!item) continue;
-
-          const existingMatch = inventory.find(
-            (inv) =>
-              (item.serialNo && inv.serialNo === item.serialNo) ||
-              (item.indoorUnitSerial && inv.indoorUnitSerial === item.indoorUnitSerial) ||
-              (inv.modelNo && inv.modelNo.toLowerCase() === item.modelNo.toLowerCase() && inv.status === 'AVAILABLE')
-          );
-
-          if (existingMatch) {
-            if (importStrategy === 'MERGE') {
-              await updateAnyDocument('inventory', existingMatch.id, {
-                sellingPrice: item.sellingPrice || existingMatch.sellingPrice,
-                indoorUnitSerial: item.indoorUnitSerial || existingMatch.indoorUnitSerial,
-                outdoorUnitSerial: item.outdoorUnitSerial || existingMatch.outdoorUnitSerial,
-                updatedAt: new Date().toISOString(),
-              });
-              mergedCount++;
-            } else {
-              await updateAnyDocument('inventory', existingMatch.id, {
-                name: item.name,
-                modelNo: item.modelNo,
-                indoorModelNo: item.indoorModelNo,
-                outdoorModelNo: item.outdoorModelNo,
-                sellingPrice: item.sellingPrice,
-                indoorUnitSerial: item.indoorUnitSerial,
-                outdoorUnitSerial: item.outdoorUnitSerial,
-                updatedAt: new Date().toISOString(),
-              });
-              replacedCount++;
-            }
-          } else {
-            await addInventoryItem({
-              name: item.name,
-              modelNo: item.modelNo || 'FTKF50TV',
-              indoorModelNo: item.indoorModelNo,
-              outdoorModelNo: item.outdoorModelNo,
-              type: item.type || 'AC',
-              brand: item.brand || 'Daikin',
-              serialNo: item.serialNo || `TALLY-${Date.now().toString().slice(-4)}${importedCount + 1}`,
-              indoorUnitSerial: item.indoorUnitSerial,
-              outdoorUnitSerial: item.outdoorUnitSerial,
-              sellingPrice: item.sellingPrice || 45000,
-            });
-            importedCount++;
-          }
-        }
-      }
-      // 4. SALES INVOICES
-      else if (selectedCategory === 'INVOICES') {
-        for (const idx of selectedItemIndices) {
-          const item = parsedInvoices[idx];
-          if (!item) continue;
-
-          // Customer Auto-Linking: resolve customer ID or create new customer
-          let effectiveCustId = item.matchedCustomerId;
-          if (!effectiveCustId) {
-            effectiveCustId = await addCustomer({
-              externalName: item.customerName,
-              phone: item.customerPhone || '9800000000',
-              billingAddress: item.billingAddress || 'Store Pickup',
-              installationAddress: item.billingAddress || 'Store Pickup',
-              gstin: item.gstin,
-              accountBalance: 0,
-              notes: `Auto-linked from Tally Invoice #${item.invoiceNumber}`,
-            });
-          }
-
-          const existingInv = invoices.find((inv) => inv.id === item.invoiceNumber || inv.notes?.includes(item.invoiceNumber));
-
-          const subtotal = item.taxableAmount || item.totalAmount / 1.18;
-          const taxAmount = item.cgstAmount && item.sgstAmount ? item.cgstAmount + item.sgstAmount + (item.igstAmount || 0) : item.totalAmount - subtotal;
-
-          if (existingInv && importStrategy === 'REPLACE') {
-            await updateAnyDocument('invoices', existingInv.id, {
-              customerId: effectiveCustId,
-              customerExternalName: item.customerName,
-              totalAmount: item.totalAmount,
-              subtotal,
-              taxAmount,
-              amountDue: item.totalAmount,
-              updatedAt: new Date().toISOString(),
-            });
-            replacedCount++;
-          } else {
-            await addInvoice(
-              {
-                customerId: effectiveCustId,
-                customerExternalName: item.customerName,
-                customerPhone: item.customerPhone || 'Not specified',
-                billingAddress: item.billingAddress || 'Store Pickup',
-                installationAddress: item.billingAddress || 'Store Pickup',
-                items: item.items.map((it, itIdx) => ({
-                  id: `inv-it-${Date.now()}-${itIdx}`,
-                  name: it.name,
-                  modelNo: it.modelNo || 'STANDARD',
-                  indoorModelNo: it.indoorModelNo,
-                  outdoorModelNo: it.outdoorModelNo,
-                  indoorUnitSerial: it.indoorUnitSerial,
-                  outdoorUnitSerial: it.outdoorUnitSerial,
-                  serialNo: it.serialNo,
-                  type: 'AC',
-                  brand: 'Daikin',
-                  quantity: it.quantity,
-                  rate: it.rate,
-                  taxPercent: 18,
-                  isAmountWithTax: true,
-                  discount: 0,
-                  lineTotal: it.amount,
-                })),
-                subtotal,
-                taxAmount,
-                discountAmount: 0,
-                totalAmount: item.totalAmount,
-                prepaidSplits: {
-                  fromBalance: 0,
-                  upi: { amount: 0, receivingBank: '', utr: '' },
-                  card: { amount: 0, receivingBank: '', authId: '' },
-                  chequeOrNeft: { amount: 0, chequeOrSlipOrUtr: '', bank: '' },
-                  cash: { amount: 0, drawerRegister: '' },
-                },
-                totalPrepaid: 0,
-                amountDue: item.totalAmount,
-                paymentStatus: 'UNPAID',
-                gstNumber,
-                notes: item.narration || `Imported from Tally Prime Voucher #${item.invoiceNumber}`,
-              },
-              item.invoiceNumber
-            );
-            importedCount++;
-          }
-        }
-      }
-      // 5. DELIVERY NOTES (Pending Shipments)
-      else if (selectedCategory === 'DELIVERY_NOTES') {
-        for (const idx of selectedItemIndices) {
-          const item = parsedDeliveryNotes[idx];
-          if (!item) continue;
-
-          let effectiveCustId = item.matchedCustomerId;
-          if (!effectiveCustId) {
-            effectiveCustId = await addCustomer({
-              externalName: item.customerName,
-              phone: item.customerPhone || '9800000000',
-              billingAddress: item.billingAddress || 'Delivery Address',
-              installationAddress: item.billingAddress || 'Delivery Address',
-              gstin: item.gstin,
-              accountBalance: 0,
-              notes: `Auto-linked from Tally Delivery Note #${item.invoiceNumber}`,
-            });
-          }
-
-          const itemsSummary = item.items
-            .map((it) => `${it.name} (Qty: ${it.quantity}${it.indoorUnitSerial ? `, IDU: ${it.indoorUnitSerial}` : ''}${it.outdoorUnitSerial ? `, ODU: ${it.outdoorUnitSerial}` : ''})`)
-            .join(' | ');
-
-          await createAnyDocument(
-            'shipments',
-            {
-              customerId: effectiveCustId,
-              customerExternalName: item.customerName,
-              customerPhone: item.customerPhone || 'Not specified',
-              deliveryAddress: item.billingAddress || 'Delivery Location',
-              installationAddress: item.billingAddress || 'Delivery Location',
-              itemsSummary,
-              status: 'ORDER_PLACED',
-              outForDeliveryEnabled: false,
-              trackingUpdates: [
-                {
-                  id: `trk-${Date.now()}`,
-                  timestamp: new Date().toISOString(),
-                  message: `Imported from Tally Delivery Note Challan #${item.invoiceNumber}`,
-                },
-              ],
-              createdAt: new Date().toISOString(),
-            },
-            item.invoiceNumber
-          );
-          importedCount++;
-        }
+      // 1. Sync Customers
+      let custIdx = 0;
+      for (const c of currentData.customers) {
+        custIdx++;
+        updateProgress(`Syncing Customer (${custIdx}/${currentData.customers.length}): ${c.externalName}`);
+        await addCustomer({
+          externalName: c.externalName,
+          internalName: c.internalName,
+          phone: c.phone,
+          email: c.email || '',
+          billingAddress: c.billingAddress,
+          installationAddress: c.installationAddress,
+          gstin: c.gstin || '',
+          accessPin: c.accessPin,
+          accountBalance: c.currentBalance || c.openingBalance || 0,
+          notes: `LA-D System File Sync (ID: ${c.id})`,
+        }, c.id);
+        await new Promise((r) => setTimeout(r, 15));
       }
 
-      const modeMsg = importStrategy === 'MERGE' ? `Merged ${mergedCount}, Added ${importedCount}` : `Replaced ${replacedCount}, Added ${importedCount}`;
-      const extraMsg = [
-        billsCreatedCount > 0 ? `Auto-Created ${billsCreatedCount} Invoice Bill(s)` : '',
-        shipmentsCreatedCount > 0 ? `Auto-Created ${shipmentsCreatedCount} Shipment Dispatch(es)` : '',
-        payablesCreatedCount > 0 ? `Auto-Created ${payablesCreatedCount} Vendor Payable(s)` : '',
-      ]
-        .filter(Boolean)
-        .join(' • ');
+      // 2. Sync Vendors (Payables)
+      let vIdx = 0;
+      for (const v of currentData.vendors) {
+        vIdx++;
+        updateProgress(`Syncing Payable Vendor (${vIdx}/${currentData.vendors.length}): ${v.vendorName}`);
+        await addPayable({
+          vendorName: v.vendorName,
+          vendorPhone: v.partyPhone,
+          billOrderReferenceNo: v.billOrderReferenceNo,
+          amount: v.amountWeOwe,
+          amountWeOwe: v.amountWeOwe,
+          category: v.category as any,
+          targetDueDate: v.targetDueDate,
+          status: 'PENDING',
+          notes: `LA-D Vendor Category [${v.category}] (ID: ${v.id})`,
+        });
+        await new Promise((r) => setTimeout(r, 15));
+      }
 
-      setImportSuccessMessage(
-        `Success! Processed ${selectedItemIndices.length} ${selectedCategory.toLowerCase()} record(s). (${modeMsg}${
-          extraMsg ? `; ${extraMsg}` : ''
-        })`
+      // 3. Sync Store Stock
+      let stkIdx = 0;
+      for (const stk of currentData.storeStock) {
+        stkIdx++;
+        updateProgress(`Syncing Stock Item (${stkIdx}/${currentData.storeStock.length}): ${stk.name}`);
+        await addInventoryItem({
+          name: stk.name,
+          modelNo: stk.modelNo,
+          indoorModelNo: stk.indoorModel,
+          outdoorModelNo: stk.outdoorModel,
+          type: stk.type,
+          brand: stk.brand,
+          serialNo: stk.serialNo,
+          indoorUnitSerial: stk.indoorUnitSerial,
+          outdoorUnitSerial: stk.outdoorUnitSerial,
+          sellingPrice: stk.sellingPrice,
+          stockId: stk.id,
+        });
+        await new Promise((r) => setTimeout(r, 15));
+      }
+
+      // 4. Sync Invoices
+      let invIdx = 0;
+      for (const inv of currentData.invoices) {
+        invIdx++;
+        updateProgress(`Syncing Invoice (${invIdx}/${currentData.invoices.length}): ${inv.id}`);
+        await createAnyDocument('invoices', inv, inv.id);
+        await new Promise((r) => setTimeout(r, 15));
+      }
+
+      // 5. Sync Delivery Challans
+      let delIdx = 0;
+      for (const del of currentData.deliveries) {
+        delIdx++;
+        updateProgress(`Syncing Delivery (${delIdx}/${currentData.deliveries.length}): ${del.id}`);
+        await createAnyDocument('shipments', del, del.id);
+        await new Promise((r) => setTimeout(r, 15));
+      }
+
+      // 6. Sync Receipts / Transactions
+      let txIdx = 0;
+      for (const tx of currentData.transactions) {
+        txIdx++;
+        updateProgress(`Syncing Receipt (${txIdx}/${currentData.transactions.length}): ${tx.id}`);
+        await createAnyDocument('transactions', tx, tx.id);
+        await new Promise((r) => setTimeout(r, 15));
+      }
+
+      setSyncProgressPercent(100);
+      setSyncSuccessMessage(
+        `Successfully upserted ${totalItems} LA-D records (${currentData.customers.length} Debtors, ${currentData.vendors.length} Creditors, ${currentData.invoices.length} Invoices, ${currentData.deliveries.length} Deliveries, ${currentData.transactions.length} Receipts, ${currentData.storeStock.length} Stock items) into store system!`
       );
-      setSelectedItemIndices([]);
     } catch (err: any) {
-      console.error('Import error:', err);
-      setImportErrorMessage(`Failed to import data: ${err.message || 'Unknown database error'}`);
+      setSyncErrorMessage(`Error during store sync: ${err.message}`);
     } finally {
-      setIsImporting(false);
+      setIsSyncing(false);
     }
-  };
-
-  // Export helpers
-  const getExportDataString = (): { content: string; filename: string; mime: string } => {
-    const timestamp = new Date().toISOString().slice(0, 10);
-
-    if (selectedCategory === 'CUSTOMERS') {
-      return exportFormat === 'XML'
-        ? { content: generateTallyCustomersXml(customers), filename: `Tally_Customers_Master_${timestamp}.xml`, mime: 'application/xml' }
-        : { content: generateCustomersCsv(customers), filename: `Lakhi_Customers_${timestamp}.csv`, mime: 'text/csv' };
-    } else if (selectedCategory === 'INVENTORY') {
-      return exportFormat === 'XML'
-        ? { content: generateTallyInventoryXml(inventory), filename: `Tally_StockItems_Master_${timestamp}.xml`, mime: 'application/xml' }
-        : { content: generateInventoryCsv(inventory), filename: `Lakhi_Inventory_${timestamp}.csv`, mime: 'text/csv' };
-    } else if (selectedCategory === 'INVOICES') {
-      return exportFormat === 'XML'
-        ? { content: generateTallyInvoicesXml(invoices), filename: `Tally_SalesVouchers_${timestamp}.xml`, mime: 'application/xml' }
-        : { content: generateInvoicesCsv(invoices), filename: `Lakhi_Invoices_${timestamp}.csv`, mime: 'text/csv' };
-    } else if (selectedCategory === 'QUOTATIONS') {
-      return { content: generateQuotationsCsv(quotations), filename: `Lakhi_Quotations_${timestamp}.csv`, mime: 'text/csv' };
-    } else if (selectedCategory === 'SHIPMENTS') {
-      return { content: generateShipmentsCsv(shipments), filename: `Lakhi_Shipments_${timestamp}.csv`, mime: 'text/csv' };
-    } else if (selectedCategory === 'KHATA') {
-      return { content: generateDuesKhataCsv(customers, invoices), filename: `Lakhi_Dues_Khata_${timestamp}.csv`, mime: 'text/csv' };
-    } else {
-      return {
-        content: generateFullErpBackupJson({ customers, inventory, invoices, quotations, shipments, gstNumber }),
-        filename: `Lakhi_ERP_Backup_${timestamp}.json`,
-        mime: 'application/json',
-      };
-    }
-  };
-
-  const handleDownloadExport = () => {
-    const { content, filename, mime } = getExportDataString();
-    const blob = new Blob([content], { type: `${mime};charset=utf-8;` });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.setAttribute('download', filename);
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
-  };
-
-  const handleCopyExport = () => {
-    const { content } = getExportDataString();
-    navigator.clipboard.writeText(content);
-    setExportCopied(true);
-    setTimeout(() => setExportCopied(false), 2500);
   };
 
   return (
     <div className="space-y-6 animate-in fade-in duration-200">
-      {/* Top Banner Header */}
-      <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 border border-slate-200 dark:border-slate-800 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div>
-          <div className="flex items-center gap-2.5">
-            <span className="p-2.5 rounded-2xl bg-amber-100 dark:bg-amber-950/60 text-amber-700 dark:text-amber-400">
-              <FileSpreadsheet className="w-6 h-6" />
-            </span>
-            <div>
-              <div className="flex items-center gap-2">
-                <h2 className="text-xl font-black text-slate-900 dark:text-white">
-                  Tally Prime Integration Hub
-                </h2>
-                <span className="px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300">
-                  Dual Serials &amp; Auto-Link Ready
-                </span>
-              </div>
-              <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-                Import Ledgers, Dealers, Stock, Delivery Notes &amp; Sales Vouchers from Tally Prime into Lakhi ERP with automatic Customer ID linking and Merge/Replace options.
-              </p>
+      {/* Header Profile Banner */}
+      <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-amber-950 text-white rounded-3xl p-6 border border-amber-500/30 shadow-lg space-y-4">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="p-2 rounded-xl bg-amber-500/20 border border-amber-400/40 text-amber-400 font-mono text-xs font-bold flex items-center gap-1.5">
+                <Zap className="w-3.5 h-3.5" />
+                LA-D 4.0 FILE CONVERTER
+              </span>
+              <span className="text-xs font-mono text-amber-200/90 bg-slate-800/80 px-2.5 py-0.5 rounded-md border border-slate-700">
+                Format Regex: ^(I|Q|STK|D|C|T|V)[0-9]{8}[0-9]{4}$
+              </span>
+            </div>
+            <h3 className="text-xl font-black mt-2 text-white flex items-center gap-2">
+              <span>⚡ LA-D System Data Hub &amp; Ingestion Wizard</span>
+            </h3>
+            <p className="text-xs text-slate-300 mt-1 max-w-3xl leading-relaxed">
+              Ingest, normalize, and inspect Lakhi Electronics store datasets (`.lad`, `.json`, `.txt`, `.js`, `.xml`, `.csv`).
+              Auto-generates linked Invoices (`I`), Delivery Challans (`D`), and Receipts (`T`) from nested bill allocations.
+            </p>
+          </div>
+
+          <div className="p-3.5 bg-slate-900/90 rounded-2xl border border-slate-700/80 text-[11px] font-mono space-y-1 shrink-0">
+            <div className="text-amber-400 font-bold flex items-center gap-1.5">
+              <ShieldCheck className="w-3.5 h-3.5" />
+              STORE PROFILE
+            </div>
+            <div>GSTIN: <span className="text-white font-bold">{STORE_CONSTANTS.storeGstin}</span></div>
+            <div>Helpline: <span className="text-white font-bold">{STORE_CONSTANTS.storeHelpline}</span></div>
+            <div className="pt-1 border-t border-slate-800 text-amber-300 font-bold flex items-center gap-1">
+              <Calendar className="w-3 h-3 text-amber-400" />
+              Date Key: <span className="text-white underline">{currentData.dateKey}</span>
             </div>
           </div>
         </div>
 
-        {/* Primary Action Tabs */}
-        <div className="flex items-center bg-slate-100 dark:bg-slate-800/80 p-1 rounded-2xl border border-slate-200 dark:border-slate-700/60 shrink-0">
+        {/* 3-Step Wizard Control Buttons */}
+        <div className="grid grid-cols-3 gap-2 pt-2 border-t border-slate-700/60 font-sans">
           <button
-            onClick={() => setActiveTab('IMPORT')}
-            className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold transition-all ${
-              activeTab === 'IMPORT'
-                ? 'bg-red-600 text-white shadow-xs'
-                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+            type="button"
+            onClick={() => setWizardStep(1)}
+            className={`p-3 rounded-2xl text-xs font-bold flex items-center justify-center gap-2 transition-all cursor-pointer ${
+              wizardStep === 1
+                ? 'bg-amber-500 text-slate-950 shadow-md font-black'
+                : 'bg-slate-800/80 hover:bg-slate-800 text-slate-300 border border-slate-700/80'
             }`}
           >
-            <Upload className="w-3.5 h-3.5" />
-            <span>📥 Import Data</span>
+            <Upload className="w-4 h-4" />
+            <span>Step 1: Ingest File</span>
           </button>
+
           <button
-            onClick={() => setActiveTab('EXPORT')}
-            className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold transition-all ${
-              activeTab === 'EXPORT'
-                ? 'bg-red-600 text-white shadow-xs'
-                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+            type="button"
+            onClick={() => setWizardStep(2)}
+            className={`p-3 rounded-2xl text-xs font-bold flex items-center justify-center gap-2 transition-all cursor-pointer ${
+              wizardStep === 2
+                ? 'bg-amber-500 text-slate-950 shadow-md font-black'
+                : 'bg-slate-800/80 hover:bg-slate-800 text-slate-300 border border-slate-700/80'
             }`}
           >
-            <Download className="w-3.5 h-3.5" />
-            <span>📤 Export Data</span>
+            <Layers className="w-4 h-4" />
+            <span>Step 2: Review 6 Modules</span>
           </button>
+
           <button
-            onClick={() => setActiveTab('GUIDE')}
-            className={`flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-bold transition-all ${
-              activeTab === 'GUIDE'
-                ? 'bg-red-600 text-white shadow-xs'
-                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+            type="button"
+            onClick={() => setWizardStep(3)}
+            className={`p-3 rounded-2xl text-xs font-bold flex items-center justify-center gap-2 transition-all cursor-pointer ${
+              wizardStep === 3
+                ? 'bg-amber-500 text-slate-950 shadow-md font-black'
+                : 'bg-slate-800/80 hover:bg-slate-800 text-slate-300 border border-slate-700/80'
             }`}
           >
-            <BookOpen className="w-3.5 h-3.5" />
-            <span>📖 Documentation</span>
+            <Database className="w-4 h-4" />
+            <span>Step 3: Export &amp; Sync</span>
           </button>
         </div>
       </div>
 
-      {/* TAB 1: IMPORT FROM TALLY PRIME */}
-      {activeTab === 'IMPORT' && (
+      {/* Messages */}
+      {syncSuccessMessage && (
+        <div className="p-4 bg-emerald-50 dark:bg-emerald-950/60 border border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-300 rounded-2xl text-xs font-bold flex items-center gap-2.5">
+          <CheckCircle2 className="w-4 h-4 shrink-0" />
+          <span>{syncSuccessMessage}</span>
+        </div>
+      )}
+
+      {syncErrorMessage && (
+        <div className="p-4 bg-red-50 dark:bg-red-950/60 border border-red-200 dark:border-red-800 text-red-800 dark:text-red-300 rounded-2xl text-xs font-bold flex items-center gap-2.5">
+          <AlertCircle className="w-4 h-4 shrink-0" />
+          <span>{syncErrorMessage}</span>
+        </div>
+      )}
+
+      {/* STEP 1: INGEST FILE */}
+      {wizardStep === 1 && (
         <div className="space-y-6">
-          {/* Strategy Bar: Merge vs Replace */}
-          <div className="bg-white dark:bg-slate-900 p-4 rounded-3xl border border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-xs">
-            <div className="flex items-center gap-3">
-              <span className="p-2 rounded-xl bg-blue-100 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300">
-                <SlidersHorizontal className="w-4 h-4" />
+          <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 border border-slate-200 dark:border-slate-800 shadow-xs space-y-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <h4 className="text-sm font-black text-slate-900 dark:text-white flex items-center gap-2">
+                  <Upload className="w-4 h-4 text-amber-600" />
+                  <span>Ingest Tally / LA-D Dataset File (.xml, .csv, .json, .txt, .lad, .js)</span>
+                </h4>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                  Select or drop your legacy Tally XML or standardized LA-D system file. Dynamic date key detection automatically resolves keying parameters.
+                </p>
+              </div>
+
+              {uploadedFileName && (
+                <span className="px-3 py-1 rounded-full text-xs font-mono font-bold bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300 flex items-center gap-1.5">
+                  <FileText className="w-3.5 h-3.5" />
+                  {uploadedFileName}
+                </span>
+              )}
+            </div>
+
+            <div
+              onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+              onDragLeave={() => setDragOver(false)}
+              onDrop={handleDrop}
+              onClick={() => fileInputRef.current?.click()}
+              className={`border-2 border-dashed rounded-2xl p-8 text-center transition-all cursor-pointer ${
+                dragOver
+                  ? 'border-amber-500 bg-amber-50/50 dark:bg-amber-950/20'
+                  : 'border-slate-300 dark:border-slate-700 hover:border-amber-400 bg-slate-50/50 dark:bg-slate-800/20'
+              }`}
+            >
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept=".xml,.csv,.json,.txt,.lad,.js"
+                onChange={handleFileChange}
+                className="hidden"
+              />
+              <FileSpreadsheet className="w-12 h-12 text-amber-600 mx-auto mb-3" />
+              <div className="text-xs font-bold text-slate-800 dark:text-slate-200">
+                Click to browse or drop Master.xml / Tally XML or LA-D file here
+              </div>
+              <div className="text-[11px] text-slate-400 mt-1 font-mono">
+                Auto-resolves Date Key (YYYYMMDD) and generates Invoices (I), Deliveries (D), Receipts (T), Debtors (C), Creditors (V), and Stock (STK).
+              </div>
+            </div>
+          </div>
+
+          {/* Ingestion & Normalization Log Console */}
+          <div className="bg-slate-950 text-slate-200 rounded-3xl p-6 border border-slate-800 shadow-lg font-mono text-xs space-y-3">
+            <div className="flex items-center justify-between pb-2 border-b border-slate-800">
+              <span className="text-amber-400 font-bold flex items-center gap-2">
+                <FileCode className="w-4 h-4" />
+                LA-D Dynamic Date Key &amp; Extraction Log
               </span>
-              <div>
-                <span className="text-xs font-black text-slate-900 dark:text-white block">
-                  Import &amp; De-duplication Strategy
-                </span>
-                <span className="text-[11px] text-slate-500 dark:text-slate-400">
-                  Controls how matching records are handled during database sync
-                </span>
-              </div>
+              <span className="text-[10px] text-slate-400 bg-slate-900 px-2.5 py-1 rounded-md border border-slate-800">
+                Date Key: {currentData.dateKey}
+              </span>
             </div>
 
-            <div className="flex items-center bg-slate-100 dark:bg-slate-800 p-1 rounded-2xl border border-slate-200 dark:border-slate-700">
+            <div className="space-y-1.5 text-[11px] text-slate-300 max-h-48 overflow-y-auto leading-relaxed">
+              <div className="text-emerald-400">✓ Ingestion Engine Initialized. Base Date Key resolved dynamically: {currentData.dateKey}</div>
+              <div className="text-slate-400">→ Debtors Parsed (Sundry Debtors): <span className="text-amber-300 font-bold">{currentData.customers.length} records</span></div>
+              <div className="text-slate-400">→ Creditors Parsed (Sundry Creditors): <span className="text-blue-300 font-bold">{currentData.vendors.length} records</span></div>
+              <div className="text-slate-400">→ Store Stock Parsed: <span className="text-emerald-300 font-bold">{currentData.storeStock.length} items</span></div>
+              <div className="text-emerald-400">✓ Auto-generated Linked Invoices (I{currentData.dateKey}XXXX): <span className="text-purple-300 font-bold">{currentData.invoices.length} invoices</span></div>
+              <div className="text-emerald-400">✓ Auto-generated Linked Delivery Challans (D{currentData.dateKey}XXXX): <span className="text-teal-300 font-bold">{currentData.deliveries.length} challans</span></div>
+              <div className="text-emerald-400">✓ Auto-generated Linked Inflow Receipts (T{currentData.dateKey}XXXX): <span className="text-indigo-300 font-bold">{currentData.transactions.length} receipts</span></div>
+            </div>
+
+            <div className="pt-2 flex justify-end">
               <button
                 type="button"
-                onClick={() => setImportStrategy('MERGE')}
-                className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all ${
-                  importStrategy === 'MERGE'
-                    ? 'bg-emerald-600 text-white shadow-xs'
-                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
-                }`}
+                onClick={() => setWizardStep(2)}
+                className="px-4 py-2 bg-amber-500 hover:bg-amber-600 text-slate-950 font-black rounded-xl text-xs flex items-center gap-2 cursor-pointer transition-all"
               >
-                <Zap className="w-3.5 h-3.5" />
-                <span>Smart Merge (Auto-Detect)</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setImportStrategy('REPLACE')}
-                className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all ${
-                  importStrategy === 'REPLACE'
-                    ? 'bg-amber-600 text-white shadow-xs'
-                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
-                }`}
-              >
-                <RefreshCw className="w-3.5 h-3.5" />
-                <span>Replace / Overwrite Data</span>
+                <span>Proceed to Review 6 Store Modules</span>
+                <ArrowRight className="w-4 h-4" />
               </button>
             </div>
           </div>
+        </div>
+      )}
 
-          {/* Step 1: Select Category & Upload File */}
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            {/* Category Selector Card */}
-            <div className="bg-white dark:bg-slate-900 rounded-3xl p-5 border border-slate-200 dark:border-slate-800 shadow-xs space-y-3">
-              <h3 className="text-xs font-black uppercase tracking-wider text-slate-500 dark:text-slate-400 flex items-center gap-2">
-                <span className="w-5 h-5 rounded-full bg-red-600 text-white text-[10px] flex items-center justify-center font-bold">
-                  1
-                </span>
-                Select Data Category
-              </h3>
+      {/* STEP 2: REVIEW 6 STORE MODULES */}
+      {wizardStep === 2 && (
+        <div className="space-y-6">
+          {/* Module Selector Sub-Tabs */}
+          <div className="flex flex-wrap items-center gap-2 border-b border-slate-200 dark:border-slate-800 pb-3">
+            <button
+              type="button"
+              onClick={() => setReviewTab('invoices')}
+              className={`px-4 py-2.5 rounded-2xl text-xs font-bold flex items-center gap-2 transition-all cursor-pointer ${
+                reviewTab === 'invoices'
+                  ? 'bg-purple-600 text-white shadow-md'
+                  : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
+              }`}
+            >
+              <Receipt className="w-4 h-4" />
+              <span>Invoices ({currentData.invoices.length})</span>
+            </button>
 
-              <div className="space-y-2">
-                {[
-                  {
-                    id: 'CUSTOMERS' as const,
-                    title: 'Customer Debtors',
-                    desc: 'Sundry Debtors with Phone, Address, GSTIN, Opening Balance',
-                    icon: Users,
-                    badge: `${customers.length} Accounts`,
-                  },
-                  {
-                    id: 'DEALERS' as const,
-                    title: 'Dealers / Suppliers',
-                    desc: 'Sundry Creditors & Wholesale Distributors',
-                    icon: Building2,
-                    badge: 'Creditors',
-                  },
-                  {
-                    id: 'INVENTORY' as const,
-                    title: 'Stock & Dual Serials',
-                    desc: 'AC Models, Godowns, IDU & ODU Warranty Serials',
-                    icon: Boxes,
-                    badge: `${inventory.length} Units`,
-                  },
-                  {
-                    id: 'INVOICES' as const,
-                    title: 'Sales Invoices',
-                    desc: 'Vouchers with Customer ID Linking & GST Tax',
-                    icon: Receipt,
-                    badge: `${invoices.length} Bills`,
-                  },
-                  {
-                    id: 'DELIVERY_NOTES' as const,
-                    title: 'Delivery Notes (Challans)',
-                    desc: 'Pending Warehouse Dispatches & Delivery Shipments',
-                    icon: Truck,
-                    badge: `${shipments.length} Dispatches`,
-                  },
-                ].map((cat) => {
-                  const Icon = cat.icon;
-                  const isSelected = selectedCategory === cat.id;
-                  return (
-                    <button
-                      key={cat.id}
-                      onClick={() => {
-                        setSelectedCategory(cat.id);
-                        setSelectedItemIndices([]);
-                        setImportErrorMessage(null);
-                        setImportSuccessMessage(null);
-                      }}
-                      className={`w-full p-3 rounded-2xl border text-left transition-all flex items-start gap-3 ${
-                        isSelected
-                          ? 'bg-red-50/60 dark:bg-red-950/40 border-red-500/80 ring-2 ring-red-500/20'
-                          : 'bg-slate-50/50 dark:bg-slate-800/40 border-slate-200 dark:border-slate-800 hover:border-slate-300'
-                      }`}
-                    >
-                      <div
-                        className={`p-2 rounded-xl shrink-0 ${
-                          isSelected
-                            ? 'bg-red-600 text-white shadow-xs'
-                            : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700'
-                        }`}
-                      >
-                        <Icon className="w-4 h-4" />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center justify-between">
-                          <span className="font-bold text-xs text-slate-900 dark:text-white">
-                            {cat.title}
-                          </span>
-                          <span className="text-[10px] font-mono text-slate-400">
-                            {cat.badge}
-                          </span>
-                        </div>
-                        <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 leading-snug">
-                          {cat.desc}
-                        </p>
-                      </div>
-                    </button>
-                  );
-                })}
+            <button
+              type="button"
+              onClick={() => setReviewTab('deliveries')}
+              className={`px-4 py-2.5 rounded-2xl text-xs font-bold flex items-center gap-2 transition-all cursor-pointer ${
+                reviewTab === 'deliveries'
+                  ? 'bg-teal-600 text-white shadow-md'
+                  : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
+              }`}
+            >
+              <Truck className="w-4 h-4" />
+              <span>Deliveries ({currentData.deliveries.length})</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setReviewTab('inflows')}
+              className={`px-4 py-2.5 rounded-2xl text-xs font-bold flex items-center gap-2 transition-all cursor-pointer ${
+                reviewTab === 'inflows'
+                  ? 'bg-indigo-600 text-white shadow-md'
+                  : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
+              }`}
+            >
+              <DollarSign className="w-4 h-4" />
+              <span>Inflow Receipts ({currentData.transactions.length})</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setReviewTab('customers')}
+              className={`px-4 py-2.5 rounded-2xl text-xs font-bold flex items-center gap-2 transition-all cursor-pointer ${
+                reviewTab === 'customers'
+                  ? 'bg-amber-600 text-white shadow-md'
+                  : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
+              }`}
+            >
+              <Users className="w-4 h-4" />
+              <span>Debtors ({currentData.customers.length})</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setReviewTab('vendors')}
+              className={`px-4 py-2.5 rounded-2xl text-xs font-bold flex items-center gap-2 transition-all cursor-pointer ${
+                reviewTab === 'vendors'
+                  ? 'bg-blue-600 text-white shadow-md'
+                  : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
+              }`}
+            >
+              <Building className="w-4 h-4" />
+              <span>Creditors ({currentData.vendors.length})</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setReviewTab('stock')}
+              className={`px-4 py-2.5 rounded-2xl text-xs font-bold flex items-center gap-2 transition-all cursor-pointer ${
+                reviewTab === 'stock'
+                  ? 'bg-emerald-600 text-white shadow-md'
+                  : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700'
+              }`}
+            >
+              <Package className="w-4 h-4" />
+              <span>Store Stock ({currentData.storeStock.length})</span>
+            </button>
+          </div>
+
+          {/* Module Data Table View */}
+          <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 border border-slate-200 dark:border-slate-800 shadow-xs">
+            {/* 1. INVOICES */}
+            {reviewTab === 'invoices' && (
+              <div className="space-y-4">
+                <div className="flex justify-between items-center text-xs font-bold text-slate-700 dark:text-slate-300">
+                  <span>Auto-Generated Invoices (`I{currentData.dateKey}XXXX`)</span>
+                  <span className="font-mono text-purple-600 dark:text-purple-400">Total: {currentData.invoices.length} Bills</span>
+                </div>
+                <div className="overflow-x-auto border border-slate-200 dark:border-slate-800 rounded-2xl">
+                  <table className="w-full text-left text-xs font-mono">
+                    <thead className="bg-slate-50 dark:bg-slate-800 text-[11px] uppercase text-slate-500 border-b border-slate-200 dark:border-slate-800">
+                      <tr>
+                        <th className="p-3">Invoice ID</th>
+                        <th className="p-3">Custom Bill Ref</th>
+                        <th className="p-3 font-sans">Customer</th>
+                        <th className="p-3 text-right">Subtotal</th>
+                        <th className="p-3 text-right">GST Tax</th>
+                        <th className="p-3 text-right">Total Bill</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                      {currentData.invoices.map((inv) => (
+                        <tr key={inv.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
+                          <td className="p-3 font-bold text-purple-600 dark:text-purple-400">{inv.id}</td>
+                          <td className="p-3 font-bold text-slate-800 dark:text-slate-200">{inv.linkedQuoteId || inv.paymentTransId || '-'}</td>
+                          <td className="p-3 font-sans">
+                            <div className="font-bold text-slate-900 dark:text-white">{inv.customerExternalName}</div>
+                            <div className="text-[10px] text-slate-400">{inv.customerPhone}</div>
+                          </td>
+                          <td className="p-3 text-right text-slate-600 dark:text-slate-400">{formatCurrency(inv.subtotal)}</td>
+                          <td className="p-3 text-right text-slate-600 dark:text-slate-400">{formatCurrency(inv.taxAmount)}</td>
+                          <td className="p-3 text-right font-black text-slate-900 dark:text-white">{formatCurrency(inv.totalAmount)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {/* 2. DELIVERIES */}
+            {reviewTab === 'deliveries' && (
+              <div className="space-y-4">
+                <div className="flex justify-between items-center text-xs font-bold text-slate-700 dark:text-slate-300">
+                  <span>Auto-Generated Delivery Challans (`D{currentData.dateKey}XXXX`)</span>
+                  <span className="font-mono text-teal-600 dark:text-teal-400">Total: {currentData.deliveries.length} Challans</span>
+                </div>
+                <div className="overflow-x-auto border border-slate-200 dark:border-slate-800 rounded-2xl">
+                  <table className="w-full text-left text-xs font-mono">
+                    <thead className="bg-slate-50 dark:bg-slate-800 text-[11px] uppercase text-slate-500 border-b border-slate-200 dark:border-slate-800">
+                      <tr>
+                        <th className="p-3">Delivery ID</th>
+                        <th className="p-3">Linked Invoice(s)</th>
+                        <th className="p-3 font-sans">Driver &amp; Vehicle</th>
+                        <th className="p-3">State</th>
+                        <th className="p-3 font-sans">Notes</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                      {currentData.deliveries.map((del) => (
+                        <tr key={del.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
+                          <td className="p-3 font-bold text-teal-600 dark:text-teal-400">{del.id}</td>
+                          <td className="p-3 font-bold text-slate-800 dark:text-slate-200">{del.invoiceIds?.join(', ') || '-'}</td>
+                          <td className="p-3 font-sans">
+                            <div className="font-bold text-slate-900 dark:text-white">{del.driverName}</div>
+                            <div className="text-[10px] text-slate-400">{del.driverPhone}</div>
+                          </td>
+                          <td className="p-3 font-sans">
+                            <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-teal-100 dark:bg-teal-950 text-teal-800 dark:text-teal-300">
+                              {del.status}
+                            </span>
+                          </td>
+                          <td className="p-3 font-sans text-slate-600 dark:text-slate-400">{del.itemsSummary}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {/* 3. INFLOWS */}
+            {reviewTab === 'inflows' && (
+              <div className="space-y-4">
+                <div className="flex justify-between items-center text-xs font-bold text-slate-700 dark:text-slate-300">
+                  <span>Auto-Generated Inflow Receipts (`T{currentData.dateKey}XXXX`)</span>
+                  <span className="font-mono text-indigo-600 dark:text-indigo-400">Total: {currentData.transactions.length} Receipts</span>
+                </div>
+                <div className="overflow-x-auto border border-slate-200 dark:border-slate-800 rounded-2xl">
+                  <table className="w-full text-left text-xs font-mono">
+                    <thead className="bg-slate-50 dark:bg-slate-800 text-[11px] uppercase text-slate-500 border-b border-slate-200 dark:border-slate-800">
+                      <tr>
+                        <th className="p-3">Receipt ID</th>
+                        <th className="p-3">Customer ID</th>
+                        <th className="p-3 font-sans">Payment Treatment</th>
+                        <th className="p-3 font-sans">Bank / Drawer</th>
+                        <th className="p-3 text-right">Amount Inflow</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                      {currentData.transactions.map((tx) => (
+                        <tr key={tx.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
+                          <td className="p-3 font-bold text-indigo-600 dark:text-indigo-400">{tx.id}</td>
+                          <td className="p-3 font-bold text-slate-800 dark:text-slate-200">{tx.customerId}</td>
+                          <td className="p-3 font-sans">
+                            <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-indigo-100 dark:bg-indigo-950 text-indigo-800 dark:text-indigo-300">
+                              {tx.treatment}
+                            </span>
+                          </td>
+                          <td className="p-3 font-sans text-slate-600 dark:text-slate-400">{tx.bankOrDrawer || tx.mode}</td>
+                          <td className="p-3 text-right font-black text-emerald-600 dark:text-emerald-400">{formatCurrency(tx.amount)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {/* 4. CUSTOMERS */}
+            {reviewTab === 'customers' && (
+              <div className="space-y-4">
+                <div className="flex justify-between items-center text-xs font-bold text-slate-700 dark:text-slate-300">
+                  <span>Sundry Debtors (`C{currentData.dateKey}XXXX`)</span>
+                  <span className="font-mono text-amber-600 dark:text-amber-400">Total: {currentData.customers.length} Debtors</span>
+                </div>
+                <div className="overflow-x-auto border border-slate-200 dark:border-slate-800 rounded-2xl">
+                  <table className="w-full text-left text-xs font-mono">
+                    <thead className="bg-slate-50 dark:bg-slate-800 text-[11px] uppercase text-slate-500 border-b border-slate-200 dark:border-slate-800">
+                      <tr>
+                        <th className="p-3">Customer ID</th>
+                        <th className="p-3 font-sans">Legal &amp; Internal Alias</th>
+                        <th className="p-3 font-sans">Phone &amp; PIN</th>
+                        <th className="p-3 font-sans">Addresses</th>
+                        <th className="p-3 text-right">Account Balance</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                      {currentData.customers.map((c) => (
+                        <tr key={c.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
+                          <td className="p-3 font-bold text-amber-600 dark:text-amber-400">{c.id}</td>
+                          <td className="p-3 font-sans">
+                            <div className="font-bold text-slate-900 dark:text-white">{c.externalName}</div>
+                            <div className="text-[10px] text-slate-400">{c.internalName}</div>
+                          </td>
+                          <td className="p-3 font-sans">
+                            <div>{c.phone}</div>
+                            <div className="text-[10px] text-slate-400 font-mono">PIN: {c.accessPin}</div>
+                          </td>
+                          <td className="p-3 font-sans text-slate-600 dark:text-slate-400 text-[11px]">{c.billingAddress}</td>
+                          <td className="p-3 text-right font-black text-slate-900 dark:text-white">
+                            {formatCurrency(c.currentBalance || c.openingBalance || 0)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {/* 5. VENDORS */}
+            {reviewTab === 'vendors' && (
+              <div className="space-y-4">
+                <div className="flex justify-between items-center text-xs font-bold text-slate-700 dark:text-slate-300">
+                  <span>Sundry Creditors (`V{currentData.dateKey}XXXX`)</span>
+                  <span className="font-mono text-blue-600 dark:text-blue-400">Total: {currentData.vendors.length} Creditors</span>
+                </div>
+                <div className="overflow-x-auto border border-slate-200 dark:border-slate-800 rounded-2xl">
+                  <table className="w-full text-left text-xs font-mono">
+                    <thead className="bg-slate-50 dark:bg-slate-800 text-[11px] uppercase text-slate-500 border-b border-slate-200 dark:border-slate-800">
+                      <tr>
+                        <th className="p-3">Vendor ID</th>
+                        <th className="p-3 font-sans">Supplier Name</th>
+                        <th className="p-3 font-sans">Category</th>
+                        <th className="p-3 font-sans">Due Date &amp; PO Ref</th>
+                        <th className="p-3 text-right">Amount Owed</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                      {currentData.vendors.map((v) => (
+                        <tr key={v.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
+                          <td className="p-3 font-bold text-blue-600 dark:text-blue-400">{v.id}</td>
+                          <td className="p-3 font-sans font-bold text-slate-900 dark:text-white">{v.vendorName}</td>
+                          <td className="p-3 font-sans">
+                            <span className="px-2.5 py-1 rounded-full text-[10px] font-bold bg-blue-100 dark:bg-blue-950 text-blue-800 dark:text-blue-300">
+                              {v.category}
+                            </span>
+                          </td>
+                          <td className="p-3 font-sans text-slate-600 dark:text-slate-400 text-[11px]">
+                            <div>Due: {v.targetDueDate}</div>
+                            <div className="text-[10px] font-mono text-slate-400">{v.billOrderReferenceNo}</div>
+                          </td>
+                          <td className="p-3 text-right font-black text-red-600 dark:text-red-400">{formatCurrency(v.amountWeOwe)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {/* 6. STORE STOCK */}
+            {reviewTab === 'stock' && (
+              <div className="space-y-4">
+                <div className="flex justify-between items-center text-xs font-bold text-slate-700 dark:text-slate-300">
+                  <span>Store Stock (`STK{currentData.dateKey}XXXX`)</span>
+                  <span className="font-mono text-emerald-600 dark:text-emerald-400">Total: {currentData.storeStock.length} Stock Units</span>
+                </div>
+                <div className="overflow-x-auto border border-slate-200 dark:border-slate-800 rounded-2xl">
+                  <table className="w-full text-left text-xs font-mono">
+                    <thead className="bg-slate-50 dark:bg-slate-800 text-[11px] uppercase text-slate-500 border-b border-slate-200 dark:border-slate-800">
+                      <tr>
+                        <th className="p-3">Stock ID</th>
+                        <th className="p-3 font-sans">Item Name &amp; Brand</th>
+                        <th className="p-3 font-sans">Model(s)</th>
+                        <th className="p-3">Serial Nos</th>
+                        <th className="p-3 text-right">Selling Price</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                      {currentData.storeStock.map((stk) => (
+                        <tr key={stk.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/40">
+                          <td className="p-3 font-bold text-emerald-600 dark:text-emerald-400">{stk.id}</td>
+                          <td className="p-3 font-sans">
+                            <div className="font-bold text-slate-900 dark:text-white">{stk.name}</div>
+                            <div className="text-[10px] text-slate-400">{stk.brand} - {stk.type}</div>
+                          </td>
+                          <td className="p-3 font-sans text-[11px]">
+                            <div>Main: {stk.modelNo}</div>
+                            {stk.indoorModel && <div className="text-[10px] text-slate-400">ID: {stk.indoorModel}</div>}
+                          </td>
+                          <td className="p-3 text-[11px]">
+                            <div>{stk.serialNo}</div>
+                          </td>
+                          <td className="p-3 text-right font-black text-slate-900 dark:text-white">{formatCurrency(stk.sellingPrice)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            <div className="pt-2 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setWizardStep(3)}
+                className="px-4 py-2 bg-amber-500 hover:bg-amber-600 text-slate-950 font-black rounded-xl text-xs flex items-center gap-2 cursor-pointer transition-all"
+              >
+                <span>Proceed to Step 3: Export &amp; Sync</span>
+                <ArrowRight className="w-4 h-4" />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* STEP 3: EXPORT & SYNC */}
+      {wizardStep === 3 && (
+        <div className="space-y-6">
+          <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 border border-slate-200 dark:border-slate-800 shadow-xs space-y-6">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <div>
+                <h4 className="text-sm font-black text-slate-900 dark:text-white flex items-center gap-2">
+                  <Database className="w-4 h-4 text-amber-600" />
+                  <span>LA-D System Data Sync &amp; File Export Panel</span>
+                </h4>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                  Download standardized LA-D payload files or commit all records directly into the live store database.
+                </p>
               </div>
 
-              {/* Sample Test Data Quick Loader */}
-              <div className="pt-2 border-t border-slate-100 dark:border-slate-800 space-y-2">
-                <span className="text-[10px] font-bold text-slate-400 block uppercase tracking-wider">
-                  Quick Testing Samples
-                </span>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  <button
-                    type="button"
-                    onClick={() => handleLoadSample('ALL_MASTERS')}
-                    className="py-2 px-2 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer"
-                  >
-                    <Sparkles className="w-3.5 h-3.5 text-emerald-500" />
-                    <span>Sample All Masters Payload</span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleLoadSample('ALL')}
-                    className="py-2 px-2 bg-amber-500/10 hover:bg-amber-500/20 text-amber-700 dark:text-amber-300 border border-amber-500/30 rounded-xl text-xs font-bold transition-all flex items-center justify-center gap-1.5 cursor-pointer"
-                  >
-                    <Sparkles className="w-3.5 h-3.5 text-amber-500" />
-                    <span>Sample Vouchers Payload</span>
-                  </button>
-                </div>
-                <div className="flex gap-2">
-                  <button
-                    type="button"
-                    onClick={() => handleLoadSample('CUSTOMERS')}
-                    className="flex-1 py-1.5 px-2 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-xl text-[11px] font-bold transition-colors flex items-center justify-center gap-1 cursor-pointer"
-                  >
-                    Sample Ledgers
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleLoadSample('INVENTORY')}
-                    className="flex-1 py-1.5 px-2 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-xl text-[11px] font-bold transition-colors flex items-center justify-center gap-1 cursor-pointer"
-                  >
-                    Sample Stock
-                  </button>
-                </div>
+              {/* Read-only Dynamic Date Key Tag */}
+              <div className="px-4 py-2 bg-amber-50 dark:bg-amber-950/60 border border-amber-300 dark:border-amber-700/60 rounded-2xl text-amber-900 dark:text-amber-200 text-xs font-mono font-bold flex items-center gap-2 shrink-0">
+                <Calendar className="w-4 h-4 text-amber-600" />
+                <span>Auto-Detected Date Key: {currentData.dateKey}</span>
               </div>
             </div>
 
-            {/* Drag & Drop File Upload Zone */}
-            <div className="lg:col-span-2 bg-white dark:bg-slate-900 rounded-3xl p-5 border border-slate-200 dark:border-slate-800 shadow-xs flex flex-col justify-between">
-              <div>
-                <div className="flex items-center justify-between mb-3">
-                  <h3 className="text-xs font-black uppercase tracking-wider text-slate-500 dark:text-slate-400 flex items-center gap-2">
-                    <span className="w-5 h-5 rounded-full bg-red-600 text-white text-[10px] flex items-center justify-center font-bold">
-                      2
-                    </span>
-                    Upload Tally XML or CSV / Excel File
-                  </h3>
-                  <span className="text-[11px] font-mono text-slate-400">
-                    Supports .xml, .csv, .txt
+            {/* Live Progress Bar when Syncing */}
+            {isSyncing && (
+              <div className="p-5 bg-slate-900 text-white rounded-2xl space-y-3 animate-in fade-in duration-200">
+                <div className="flex items-center justify-between text-xs font-bold font-mono">
+                  <span className="text-amber-400 flex items-center gap-2">
+                    <Zap className="w-4 h-4 animate-bounce" />
+                    {syncProgressText || 'Syncing LA-D records to store...'}
                   </span>
+                  <span className="text-emerald-400">{syncProgressPercent}% Complete</span>
                 </div>
 
-                <div
-                  onDragOver={(e) => {
-                    e.preventDefault();
-                    setDragOver(true);
-                  }}
-                  onDragLeave={() => setDragOver(false)}
-                  onDrop={handleDrop}
-                  onClick={() => fileInputRef.current?.click()}
-                  className={`p-8 rounded-2xl border-2 border-dashed text-center cursor-pointer transition-all ${
-                    dragOver
-                      ? 'border-red-500 bg-red-50/50 dark:bg-red-950/20 scale-[0.99]'
-                      : 'border-slate-300 dark:border-slate-700 hover:border-red-400 bg-slate-50/50 dark:bg-slate-800/20'
-                  }`}
-                >
-                  <input
-                    type="file"
-                    ref={fileInputRef}
-                    onChange={handleFileChange}
-                    accept=".xml,.csv,.txt"
-                    className="hidden"
+                <div className="w-full bg-slate-800 rounded-full h-3 overflow-hidden border border-slate-700">
+                  <div
+                    className="bg-gradient-to-r from-amber-500 via-emerald-500 to-teal-400 h-full transition-all duration-150"
+                    style={{ width: `${syncProgressPercent}%` }}
                   />
-                  <div className="w-12 h-12 bg-red-100 dark:bg-red-950/50 text-red-600 dark:text-red-400 rounded-2xl flex items-center justify-center mx-auto mb-3 shadow-inner">
-                    <Upload className="w-6 h-6 animate-bounce" />
-                  </div>
-                  <h4 className="font-bold text-sm text-slate-900 dark:text-white">
-                    Click to browse or drag &amp; drop Tally export file
-                  </h4>
-                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 max-w-md mx-auto">
-                    Export from Tally Prime via <strong>Alt+E &gt; XML (Data Interchange)</strong> or <strong>Excel Spreadsheet</strong> and drop it here.
-                  </p>
-
-                  {isReadingFile && (
-                    <div className="mt-4 inline-flex items-center gap-2.5 px-4 py-2 rounded-2xl bg-blue-100 dark:bg-blue-950/80 border border-blue-300 dark:border-blue-800 text-blue-900 dark:text-blue-200 text-xs font-bold animate-pulse shadow-xs">
-                      <RefreshCw className="w-4 h-4 animate-spin text-blue-600" />
-                      <span>Reading &amp; Analyzing Tally file... Checking Ledgers, Dual Serials &amp; Vouchers</span>
-                    </div>
-                  )}
-
-                  {!isReadingFile && uploadedFileName && (
-                    <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
-                      <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-emerald-100 dark:bg-emerald-950/60 text-emerald-800 dark:text-emerald-300 text-xs font-mono font-bold border border-emerald-300/60 dark:border-emerald-800/60">
-                        <FileCode className="w-3.5 h-3.5" />
-                        <span>Loaded: {uploadedFileName}</span>
-                        {parseStats && (
-                          <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-normal">
-                            ({(parseStats.fileSizeBytes / 1024).toFixed(1)} KB • {parseStats.fileType})
-                          </span>
-                        )}
-                      </div>
-
-                      {parseStats && (
-                        <div className="flex items-center gap-1.5 text-[11px] font-mono">
-                          <span className={`px-2 py-0.5 rounded-md ${parseStats.customersFound > 0 ? 'bg-blue-100 dark:bg-blue-950 text-blue-700 dark:text-blue-300 font-bold' : 'bg-slate-100 dark:bg-slate-800 text-slate-400'}`}>
-                            {parseStats.customersFound} Debtors
-                          </span>
-                          <span className={`px-2 py-0.5 rounded-md ${parseStats.dealersFound > 0 ? 'bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 font-bold' : 'bg-slate-100 dark:bg-slate-800 text-slate-400'}`}>
-                            {parseStats.dealersFound} Creditors
-                          </span>
-                          <span className={`px-2 py-0.5 rounded-md ${parseStats.stockItemsFound > 0 ? 'bg-amber-100 dark:bg-amber-950 text-amber-700 dark:text-amber-300 font-bold' : 'bg-slate-100 dark:bg-slate-800 text-slate-400'}`}>
-                            {parseStats.stockItemsFound} Stock
-                          </span>
-                          <span className={`px-2 py-0.5 rounded-md ${parseStats.invoicesFound > 0 ? 'bg-purple-100 dark:bg-purple-950 text-purple-700 dark:text-purple-300 font-bold' : 'bg-slate-100 dark:bg-slate-800 text-slate-400'}`}>
-                            {parseStats.invoicesFound} Invoices
-                          </span>
-                          <span className={`px-2 py-0.5 rounded-md ${parseStats.deliveryNotesFound > 0 ? 'bg-teal-100 dark:bg-teal-950 text-teal-700 dark:text-teal-300 font-bold' : 'bg-slate-100 dark:bg-slate-800 text-slate-400'}`}>
-                            {parseStats.deliveryNotesFound} Delivery Notes
-                          </span>
-                        </div>
-                      )}
-                    </div>
-                  )}
                 </div>
               </div>
+            )}
 
-              {/* Status & Feedback */}
-              {importErrorMessage && (
-                <div className="mt-3 p-3 bg-red-50 dark:bg-red-950/40 border border-red-200 dark:border-red-800 rounded-xl text-xs text-red-700 dark:text-red-300 flex items-start gap-2">
-                  <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
-                  <div className="flex-1">
-                    <span className="font-bold block mb-0.5">Parse Notice:</span>
-                    <span>{importErrorMessage}</span>
-                  </div>
-                </div>
-              )}
-
-              {importSuccessMessage && (
-                <div className="mt-3 p-3 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 rounded-xl text-xs text-emerald-800 dark:text-emerald-300 flex items-center gap-2">
-                  <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-600" />
-                  <span className="font-bold">{importSuccessMessage}</span>
-                </div>
-              )}
-            </div>
-          </div>
-
-          {/* Master Summary Banner (Currencies, Groups, Units, Godowns, Accounts) */}
-          {parsedMasterSummary && (
-            <div className="bg-slate-900 text-white rounded-3xl p-5 border border-slate-800 shadow-md space-y-3">
-              <div className="flex items-center justify-between border-b border-slate-800 pb-3">
-                <div className="flex items-center gap-2">
-                  <Database className="w-4 h-4 text-amber-400" />
-                  <span className="text-xs font-black uppercase tracking-wider text-amber-400">
-                    Tally Master Structures Detected
-                  </span>
-                </div>
-                <span className="text-[10px] font-mono text-slate-400">
-                  {uploadedFileName || 'XML Payload'}
-                </span>
-              </div>
-
-              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 text-xs">
-                <div className="p-2.5 rounded-2xl bg-slate-800/80 border border-slate-700/60">
-                  <span className="text-[10px] font-bold text-slate-400 block uppercase">Currencies</span>
-                  <span className="font-mono font-black text-amber-300 text-xs block truncate">
-                    {parsedMasterSummary.currencies.length > 0
-                      ? parsedMasterSummary.currencies.map((c) => c.name || c.expandedSymbol).join(', ')
-                      : 'INR (₹)'}
-                  </span>
-                </div>
-
-                <div className="p-2.5 rounded-2xl bg-slate-800/80 border border-slate-700/60">
-                  <span className="text-[10px] font-bold text-slate-400 block uppercase">Units &amp; Godowns</span>
-                  <span className="font-mono font-black text-blue-300 text-xs block truncate">
-                    {parsedMasterSummary.units.map((u) => u.name).join(', ') || 'SET'} • {parsedMasterSummary.godowns.map((g) => g.name).join(', ') || 'Central'}
-                  </span>
-                </div>
-
-                <div className="p-2.5 rounded-2xl bg-slate-800/80 border border-slate-700/60">
-                  <span className="text-[10px] font-bold text-slate-400 block uppercase">Groups</span>
-                  <span className="font-mono font-black text-indigo-300 text-xs block truncate">
-                    {parsedMasterSummary.groups.length} ({parsedMasterSummary.groups.map((g) => g.name).slice(0, 2).join(', ')})
-                  </span>
-                </div>
-
-                <div className="p-2.5 rounded-2xl bg-slate-800/80 border border-slate-700/60">
-                  <span className="text-[10px] font-bold text-slate-400 block uppercase">Stock Items</span>
-                  <span className="font-mono font-black text-emerald-300 text-xs block truncate">
-                    {parsedMasterSummary.stockItems.length} Models
-                  </span>
-                </div>
-
-                <div className="p-2.5 rounded-2xl bg-slate-800/80 border border-slate-700/60">
-                  <span className="text-[10px] font-bold text-slate-400 block uppercase">Party Ledgers</span>
-                  <span className="font-mono font-black text-cyan-300 text-xs block truncate">
-                    {parsedMasterSummary.ledgers.length} Debtors/Creditors
-                  </span>
-                </div>
-
-                <div className="p-2.5 rounded-2xl bg-slate-800/80 border border-slate-700/60">
-                  <span className="text-[10px] font-bold text-slate-400 block uppercase">Financial/Tax</span>
-                  <span className="font-mono font-black text-purple-300 text-xs block truncate">
-                    {parsedMasterSummary.otherLedgers.length} Accounts
-                  </span>
-                </div>
-              </div>
-
-              {parsedMasterSummary.otherLedgers.length > 0 && (
-                <div className="text-[11px] text-slate-400 pt-1 flex items-center gap-2 flex-wrap">
-                  <span className="font-bold text-slate-300">Revenue &amp; Tax Ledgers Parsed:</span>
-                  {parsedMasterSummary.otherLedgers.map((l, i) => (
-                    <span key={i} className="px-2 py-0.5 rounded-md bg-slate-800 text-purple-300 font-mono text-[10px] border border-slate-700">
-                      {l.externalName} ({l.tallyParent})
-                    </span>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Step 2: Parsed Records Inspection & Batch Execution Table */}
-          {activeParsedCount > 0 && (
-            <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 border border-slate-200 dark:border-slate-800 shadow-xs space-y-4">
-              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-100 dark:border-slate-800">
-                <div>
-                  <div className="flex items-center gap-2">
-                    <span className="w-5 h-5 rounded-full bg-red-600 text-white text-[10px] flex items-center justify-center font-bold">
-                      3
-                    </span>
-                    <h3 className="text-sm font-black text-slate-900 dark:text-white">
-                      Review Parsed Records ({activeParsedCount} Found)
-                    </h3>
-                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-100 dark:bg-blue-950 text-blue-700 dark:text-blue-300">
-                      Strategy: {importStrategy}
-                    </span>
-                  </div>
-                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                    Inspect auto-linked Customer IDs, dual serial numbers, and tax breakdowns before executing live import.
-                  </p>
-                </div>
-
-                <div className="flex items-center gap-3">
-                  <button
-                    type="button"
-                    onClick={handleToggleSelectAll}
-                    className="px-3 py-1.5 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 rounded-xl text-xs font-bold transition-colors"
-                  >
-                    {selectedItemIndices.length === activeParsedCount ? 'Deselect All' : `Select All (${activeParsedCount})`}
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={handleExecuteImport}
-                    disabled={isImporting || selectedItemIndices.length === 0}
-                    className="px-5 py-2 bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold shadow-xs flex items-center gap-2 transition-all cursor-pointer"
-                  >
-                    {isImporting ? (
-                      <>
-                        <RefreshCw className="w-4 h-4 animate-spin" />
-                        <span>Syncing to Database...</span>
-                      </>
-                    ) : (
-                      <>
-                        <Database className="w-4 h-4" />
-                        <span>Execute Import ({selectedItemIndices.length})</span>
-                      </>
-                    )}
-                  </button>
-                </div>
-              </div>
-
-              {/* Parsed Data High-Density Table */}
-              <div className="overflow-x-auto rounded-2xl border border-slate-200 dark:border-slate-800">
-                <table className="w-full text-left text-xs">
-                  <thead className="bg-slate-50 dark:bg-slate-800/60 text-slate-600 dark:text-slate-400 font-bold uppercase text-[10px] tracking-wider border-b border-slate-200 dark:border-slate-800">
-                    <tr>
-                      <th className="p-3 w-10 text-center">
-                        <input
-                          type="checkbox"
-                          checked={selectedItemIndices.length === activeParsedCount && activeParsedCount > 0}
-                          onChange={handleToggleSelectAll}
-                          className="rounded border-slate-300 text-red-600 focus:ring-red-500"
-                        />
-                      </th>
-                      <th className="p-3">Record Details</th>
-                      <th className="p-3">Role / Parent Group</th>
-                      <th className="p-3">Auto-Link / Duplication Match</th>
-                      <th className="p-3 text-right">Balance / Amount (INR)</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                    {selectedCategory === 'CUSTOMERS' &&
-                      parsedCustomers.map((cust, idx) => {
-                        const isChecked = selectedItemIndices.includes(idx);
-                        return (
-                          <tr key={idx} className={`hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors ${isChecked ? 'bg-red-50/30 dark:bg-red-950/10' : ''}`}>
-                            <td className="p-3 text-center">
-                              <input
-                                type="checkbox"
-                                checked={isChecked}
-                                onChange={() => handleToggleSingle(idx)}
-                                className="rounded border-slate-300 text-red-600 focus:ring-red-500"
-                              />
-                            </td>
-                            <td className="p-3">
-                              <div className="font-bold text-slate-900 dark:text-white">{cust.externalName}</div>
-                              <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 flex flex-wrap gap-1.5">
-                                <span>Phone: {cust.phone || 'N/A'}</span>
-                                {cust.gstin && <span>• GSTIN: <strong className="font-mono text-slate-800 dark:text-slate-200">{cust.gstin}</strong></span>}
-                                {cust.panNumber && <span>• PAN: <strong className="font-mono text-slate-800 dark:text-slate-200">{cust.panNumber}</strong></span>}
-                              </div>
-                              <div className="text-[10px] text-slate-400 truncate max-w-xs">{cust.billingAddress}</div>
-                              {cust.billAllocations && cust.billAllocations.length > 0 && (
-                                <div className="text-[10px] text-blue-600 dark:text-blue-400 font-mono font-bold mt-1 bg-blue-50 dark:bg-blue-950/60 px-2 py-0.5 rounded border border-blue-200 dark:border-blue-900 inline-block">
-                                  Bill Allocations: {cust.billAllocations.map((b) => `${b.billName} (₹${b.amount.toLocaleString('en-IN')})`).join(', ')}
-                                </div>
-                              )}
-                            </td>
-                            <td className="p-3">
-                              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-blue-100 dark:bg-blue-950 text-blue-800 dark:text-blue-300">
-                                {cust.tallyParent || 'Sundry Debtors'}
-                              </span>
-                            </td>
-                            <td className="p-3">
-                              {cust.existingMatchId ? (
-                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300">
-                                  <Link2 className="w-3 h-3" />
-                                  Matches ID: {cust.existingMatchId} ({importStrategy})
-                                </span>
-                              ) : (
-                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300">
-                                  <Sparkles className="w-3 h-3" />
-                                  New Customer Account
-                                </span>
-                              )}
-                            </td>
-                            <td className="p-3 text-right font-mono tabular-nums font-bold">
-                              <span className={cust.balanceDirection === 'Dr' ? 'text-blue-600 dark:text-blue-400' : 'text-emerald-600 dark:text-emerald-400'}>
-                                {cust.balanceDirection === 'Dr' ? 'Dr ' : 'Cr '}
-                                ₹{(cust.accountBalance || 0).toLocaleString('en-IN')}
-                              </span>
-                            </td>
-                          </tr>
-                        );
-                      })}
-
-                    {selectedCategory === 'DEALERS' &&
-                      parsedDealers.map((dlr, idx) => {
-                        const isChecked = selectedItemIndices.includes(idx);
-                        return (
-                          <tr key={idx} className={`hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors ${isChecked ? 'bg-red-50/30 dark:bg-red-950/10' : ''}`}>
-                            <td className="p-3 text-center">
-                              <input
-                                type="checkbox"
-                                checked={isChecked}
-                                onChange={() => handleToggleSingle(idx)}
-                                className="rounded border-slate-300 text-red-600 focus:ring-red-500"
-                              />
-                            </td>
-                            <td className="p-3">
-                              <div className="font-bold text-slate-900 dark:text-white">{dlr.externalName}</div>
-                              <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
-                                Phone: {dlr.phone || 'N/A'} • GSTIN: {dlr.gstin || 'N/A'}
-                              </div>
-                            </td>
-                            <td className="p-3">
-                              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-indigo-100 dark:bg-indigo-950 text-indigo-800 dark:text-indigo-300">
-                                {dlr.tallyParent || 'Sundry Creditors'}
-                              </span>
-                            </td>
-                            <td className="p-3">
-                              {dlr.existingMatchId ? (
-                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300">
-                                  <Link2 className="w-3 h-3" />
-                                  Matched ID: {dlr.existingMatchId}
-                                </span>
-                              ) : (
-                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300">
-                                  New Supplier Account
-                                </span>
-                              )}
-                            </td>
-                            <td className="p-3 text-right font-mono tabular-nums font-bold text-amber-600 dark:text-amber-400">
-                              Cr ₹{(dlr.accountBalance || 0).toLocaleString('en-IN')}
-                            </td>
-                          </tr>
-                        );
-                      })}
-
-                    {selectedCategory === 'INVENTORY' &&
-                      parsedStock.map((stk, idx) => {
-                        const isChecked = selectedItemIndices.includes(idx);
-                        return (
-                          <tr key={idx} className={`hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors ${isChecked ? 'bg-red-50/30 dark:bg-red-950/10' : ''}`}>
-                            <td className="p-3 text-center">
-                              <input
-                                type="checkbox"
-                                checked={isChecked}
-                                onChange={() => handleToggleSingle(idx)}
-                                className="rounded border-slate-300 text-red-600 focus:ring-red-500"
-                              />
-                            </td>
-                            <td className="p-3">
-                              <div className="font-bold text-slate-900 dark:text-white">{stk.name}</div>
-                              <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5 flex flex-wrap gap-2">
-                                <span>Model: {stk.modelNo}</span>
-                                {stk.indoorUnitSerial && <span className="text-blue-600 dark:text-blue-400 font-mono font-bold">IDU SN: {stk.indoorUnitSerial}</span>}
-                                {stk.outdoorUnitSerial && <span className="text-purple-600 dark:text-purple-400 font-mono font-bold">ODU SN: {stk.outdoorUnitSerial}</span>}
-                              </div>
-                            </td>
-                            <td className="p-3">
-                              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300">
-                                {stk.godownName || 'Central Godown'}
-                              </span>
-                            </td>
-                            <td className="p-3">
-                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300">
-                                <PackageCheck className="w-3 h-3" />
-                                Ready for Store Stock
-                              </span>
-                            </td>
-                            <td className="p-3 text-right font-mono tabular-nums font-bold text-slate-900 dark:text-white">
-                              ₹{(stk.sellingPrice || 0).toLocaleString('en-IN')}
-                            </td>
-                          </tr>
-                        );
-                      })}
-
-                    {selectedCategory === 'INVOICES' &&
-                      parsedInvoices.map((inv, idx) => {
-                        const isChecked = selectedItemIndices.includes(idx);
-                        return (
-                          <tr key={idx} className={`hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors ${isChecked ? 'bg-red-50/30 dark:bg-red-950/10' : ''}`}>
-                            <td className="p-3 text-center">
-                              <input
-                                type="checkbox"
-                                checked={isChecked}
-                                onChange={() => handleToggleSingle(idx)}
-                                className="rounded border-slate-300 text-red-600 focus:ring-red-500"
-                              />
-                            </td>
-                            <td className="p-3">
-                              <div className="font-bold text-slate-900 dark:text-white">Voucher #{inv.invoiceNumber}</div>
-                              <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
-                                Party: <strong>{inv.customerName}</strong> ({inv.items.length} Line Items)
-                              </div>
-                              {inv.cgstAmount || inv.sgstAmount ? (
-                                <div className="text-[10px] font-mono text-slate-400 mt-0.5">
-                                  CGST: ₹{inv.cgstAmount} • SGST: ₹{inv.sgstAmount} (Taxable: ₹{inv.taxableAmount})
-                                </div>
-                              ) : null}
-                            </td>
-                            <td className="p-3">
-                              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-purple-100 dark:bg-purple-950 text-purple-800 dark:text-purple-300">
-                                {inv.vchType}
-                              </span>
-                            </td>
-                            <td className="p-3">
-                              {inv.matchedCustomerId ? (
-                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300">
-                                  <Link2 className="w-3 h-3" />
-                                  Auto-Linked: {inv.matchedCustomerName || inv.matchedCustomerId}
-                                </span>
-                              ) : (
-                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-blue-100 dark:bg-blue-950 text-blue-800 dark:text-blue-300">
-                                  <Sparkles className="w-3 h-3" />
-                                  Auto-Create New Customer Account
-                                </span>
-                              )}
-                            </td>
-                            <td className="p-3 text-right font-mono tabular-nums font-bold text-slate-900 dark:text-white">
-                              ₹{(inv.totalAmount || 0).toLocaleString('en-IN')}
-                            </td>
-                          </tr>
-                        );
-                      })}
-
-                    {selectedCategory === 'DELIVERY_NOTES' &&
-                      parsedDeliveryNotes.map((note, idx) => {
-                        const isChecked = selectedItemIndices.includes(idx);
-                        return (
-                          <tr key={idx} className={`hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors ${isChecked ? 'bg-red-50/30 dark:bg-red-950/10' : ''}`}>
-                            <td className="p-3 text-center">
-                              <input
-                                type="checkbox"
-                                checked={isChecked}
-                                onChange={() => handleToggleSingle(idx)}
-                                className="rounded border-slate-300 text-red-600 focus:ring-red-500"
-                              />
-                            </td>
-                            <td className="p-3">
-                              <div className="font-bold text-slate-900 dark:text-white">Challan #{note.invoiceNumber}</div>
-                              <div className="text-[11px] text-slate-500 dark:text-slate-400 mt-0.5">
-                                Customer: {note.customerName}
-                              </div>
-                              <div className="text-[10px] text-slate-400 truncate max-w-xs">{note.items.map((i) => i.name).join(', ')}</div>
-                            </td>
-                            <td className="p-3">
-                              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-teal-100 dark:bg-teal-950 text-teal-800 dark:text-teal-300">
-                                Delivery Challan
-                              </span>
-                            </td>
-                            <td className="p-3">
-                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold bg-teal-100 dark:bg-teal-950 text-teal-800 dark:text-teal-300">
-                                <Truck className="w-3 h-3" />
-                                Routes to Pending Shipment
-                              </span>
-                            </td>
-                            <td className="p-3 text-right font-mono tabular-nums font-bold text-slate-900 dark:text-white">
-                              ₹{(note.totalAmount || 0).toLocaleString('en-IN')}
-                            </td>
-                          </tr>
-                        );
-                      })}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* TAB 2: EXPORT DATA TO TALLY PRIME */}
-      {activeTab === 'EXPORT' && (
-        <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 border border-slate-200 dark:border-slate-800 shadow-xs space-y-6">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-100 dark:border-slate-800">
-            <div>
-              <h3 className="text-sm font-black text-slate-900 dark:text-white">
-                Export Lakhi ERP Data to Tally Prime
-              </h3>
-              <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-                Generate Tally-formatted XML envelopes for instant import into Tally Prime via Gateway of Tally.
-              </p>
-            </div>
-
-            <div className="flex items-center bg-slate-100 dark:bg-slate-800 p-1 rounded-2xl border border-slate-200 dark:border-slate-700">
+            {/* Action Buttons */}
+            <div className="flex flex-wrap items-center gap-4 pt-2">
               <button
                 type="button"
-                onClick={() => setExportFormat('XML')}
-                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
-                  exportFormat === 'XML'
-                    ? 'bg-red-600 text-white shadow-xs'
-                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
-                }`}
+                onClick={() => {
+                  const txtContent = generateLeadCompleteSystemTxt(currentData);
+                  const blob = new Blob([txtContent], { type: 'text/plain;charset=utf-8;' });
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement('a');
+                  a.href = url;
+                  a.download = 'LA_D_Complete_System.txt';
+                  a.click();
+                  URL.revokeObjectURL(url);
+                }}
+                className="px-5 py-3 bg-amber-500 hover:bg-amber-600 text-slate-950 font-black rounded-2xl text-xs flex items-center gap-2 shadow-md transition-all cursor-pointer"
               >
-                XML Envelope (Tally)
+                <Download className="w-4 h-4" />
+                <span>Download LA_D_Complete_System.txt</span>
               </button>
+
               <button
                 type="button"
-                onClick={() => setExportFormat('CSV')}
-                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all ${
-                  exportFormat === 'CSV'
-                    ? 'bg-red-600 text-white shadow-xs'
-                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
-                }`}
+                onClick={() => {
+                  const jsContent = generateLeadCompleteSystemJs(currentData);
+                  const blob = new Blob([jsContent], { type: 'text/javascript;charset=utf-8;' });
+                  const url = URL.createObjectURL(blob);
+                  const a = document.createElement('a');
+                  a.href = url;
+                  a.download = 'LA_D_Complete_System.js';
+                  a.click();
+                  URL.revokeObjectURL(url);
+                }}
+                className="px-5 py-3 bg-slate-800 hover:bg-slate-700 text-amber-300 font-bold border border-amber-500/40 rounded-2xl text-xs flex items-center gap-2 transition-all cursor-pointer"
               >
-                CSV / Excel Sheet
+                <FileCode className="w-4 h-4 text-amber-400" />
+                <span>Download LA_D_Complete_System.js (UMD Module)</span>
               </button>
-            </div>
-          </div>
 
-          <div className="flex flex-wrap items-center gap-3">
-            {[
-              { id: 'CUSTOMERS' as const, label: `Customers (${customers.length})` },
-              { id: 'INVENTORY' as const, label: `Stock Items (${inventory.length})` },
-              { id: 'INVOICES' as const, label: `Sales Invoices (${invoices.length})` },
-              { id: 'QUOTATIONS' as const, label: `Quotations (${quotations.length})` },
-              { id: 'SHIPMENTS' as const, label: `Shipments (${shipments.length})` },
-              { id: 'KHATA' as const, label: 'Dues Khata' },
-              { id: 'BACKUP' as const, label: 'Full Backup JSON' },
-            ].map((cat) => (
               <button
-                key={cat.id}
                 type="button"
-                onClick={() => setSelectedCategory(cat.id)}
-                className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all ${
-                  selectedCategory === cat.id
-                    ? 'bg-slate-900 dark:bg-white text-white dark:text-slate-900 shadow-xs'
-                    : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-400 hover:bg-slate-200'
-                }`}
+                onClick={handleCommitToStore}
+                disabled={isSyncing}
+                className="px-6 py-3 bg-emerald-600 hover:bg-emerald-500 text-white font-black rounded-2xl text-xs flex items-center gap-2 shadow-lg transition-all cursor-pointer disabled:opacity-50"
               >
-                {cat.label}
+                <Database className="w-4 h-4" />
+                <span>{isSyncing ? 'Syncing Records to Store...' : 'Commit & Upsert LA-D Data to Store'}</span>
               </button>
-            ))}
-          </div>
-
-          {/* Action Download / Copy Buttons */}
-          <div className="flex flex-wrap items-center gap-3 pt-2">
-            <button
-              type="button"
-              onClick={handleDownloadExport}
-              className="px-5 py-2.5 bg-red-600 hover:bg-red-700 text-white rounded-2xl text-xs font-bold shadow-xs flex items-center gap-2 transition-all cursor-pointer"
-            >
-              <Download className="w-4 h-4" />
-              <span>Download {selectedCategory} ({exportFormat})</span>
-            </button>
-
-            <button
-              type="button"
-              onClick={handleCopyExport}
-              className="px-4 py-2.5 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-800 dark:text-slate-200 rounded-2xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer"
-            >
-              {exportCopied ? <Check className="w-4 h-4 text-emerald-600" /> : <Copy className="w-4 h-4" />}
-              <span>{exportCopied ? 'Copied to Clipboard!' : 'Copy Raw Export'}</span>
-            </button>
-          </div>
-        </div>
-      )}
-
-      {/* TAB 3: DOCUMENTATION GUIDE */}
-      {activeTab === 'GUIDE' && (
-        <div className="bg-white dark:bg-slate-900 rounded-3xl p-6 border border-slate-200 dark:border-slate-800 shadow-xs space-y-6">
-          <div>
-            <h3 className="text-sm font-black text-slate-900 dark:text-white">
-              Tally Prime Integration &amp; XML Reference Guide
-            </h3>
-            <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
-              Follow these standard procedures to import files from Tally Prime into Lakhi ERP or import Lakhi XML files into Tally Prime.
-            </p>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 text-xs text-slate-700 dark:text-slate-300">
-            <div className="p-4 bg-slate-50 dark:bg-slate-800/40 rounded-2xl border border-slate-200 dark:border-slate-800 space-y-3">
-              <h4 className="font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                <Upload className="w-4 h-4 text-red-600" />
-                How to Export XML from Tally Prime:
-              </h4>
-              <ol className="list-decimal list-inside space-y-1.5 leading-relaxed text-[11px]">
-                <li>Open Tally Prime and navigate to <strong>Gateway of Tally</strong>.</li>
-                <li>Go to <strong>Chart of Accounts &gt; Ledgers</strong> (for Customers) or <strong>Stock Items</strong> (for Inventory).</li>
-                <li>Press <strong>Alt + E (Export) &gt; Master</strong>.</li>
-                <li>Set File Format to <strong>XML (Data Interchange)</strong> and select file destination.</li>
-                <li>Drop the exported XML file directly into Lakhi ERP's Tally Integration Hub.</li>
-              </ol>
-            </div>
-
-            <div className="p-4 bg-slate-50 dark:bg-slate-800/40 rounded-2xl border border-slate-200 dark:border-slate-800 space-y-3">
-              <h4 className="font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                <Download className="w-4 h-4 text-emerald-600" />
-                How to Import Lakhi XML into Tally Prime:
-              </h4>
-              <ol className="list-decimal list-inside space-y-1.5 leading-relaxed text-[11px]">
-                <li>Download the Tally XML master or voucher file from the <strong>Export Data</strong> tab above.</li>
-                <li>Open Tally Prime and go to <strong>Alt + O (Import) &gt; Masters / Vouchers</strong>.</li>
-                <li>Enter the full path of the downloaded XML file.</li>
-                <li>Select <strong>Modify with New Data</strong> or <strong>Combine</strong> as needed.</li>
-                <li>Verify your ledgers and stock in Tally Day Book or Chart of Accounts.</li>
-              </ol>
             </div>
           </div>
         </div>
