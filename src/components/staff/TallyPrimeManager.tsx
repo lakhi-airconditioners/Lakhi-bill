@@ -175,32 +175,38 @@ export const TallyPrimeManager: React.FC = () => {
       }
 
       // 3. Sync Store Stock
+      const stockList = currentData.storeStock || currentData.inventory || currentData.stock || [];
       let stkIdx = 0;
-      for (const stk of currentData.storeStock) {
+      for (const stk of stockList) {
         stkIdx++;
-        updateProgress(`Syncing Stock Item (${stkIdx}/${currentData.storeStock.length}): ${stk.name}`);
+        const stkId = stk.id || stk.stockId || `STK-${stkIdx}`;
+        const stkName = stk.name || stk.productFullName || 'AC Unit';
+        const stkPrice = Number(stk.sellingPrice ?? stk.rate ?? stk.price ?? 0);
+        updateProgress(`Syncing Stock Item (${stkIdx}/${stockList.length}): ${stkName}`);
         await addInventoryItem({
-          name: stk.name,
-          modelNo: stk.modelNo,
-          indoorModelNo: stk.indoorModel,
-          outdoorModelNo: stk.outdoorModel,
-          type: stk.type,
-          brand: stk.brand,
-          serialNo: stk.serialNo,
+          name: stkName,
+          modelNo: stk.modelNo || stkName,
+          indoorModelNo: stk.indoorModel || stk.indoorModelNo,
+          outdoorModelNo: stk.outdoorModel || stk.outdoorModelNo,
+          type: stk.type || stk.applianceType || 'AC',
+          brand: stk.brand || 'DAIKIN',
+          serialNo: stk.serialNo || stk.indoorUnitSerial || '',
           indoorUnitSerial: stk.indoorUnitSerial,
           outdoorUnitSerial: stk.outdoorUnitSerial,
-          sellingPrice: stk.sellingPrice,
-          stockId: stk.id,
+          sellingPrice: stkPrice,
+          stockId: stkId,
         });
         await new Promise((r) => setTimeout(r, 15));
       }
 
       // 4. Sync Invoices
+      const invoiceList = currentData.invoices || currentData.bills || [];
       let invIdx = 0;
-      for (const inv of currentData.invoices) {
+      for (const inv of invoiceList) {
         invIdx++;
-        updateProgress(`Syncing Invoice (${invIdx}/${currentData.invoices.length}): ${inv.id}`);
-        await createAnyDocument('invoices', inv, inv.id);
+        const invId = inv.id || inv.invoiceId || inv.billId || `I-${invIdx}`;
+        updateProgress(`Syncing Invoice (${invIdx}/${invoiceList.length}): ${invId}`);
+        await createAnyDocument('invoices', inv, invId);
         await new Promise((r) => setTimeout(r, 15));
       }
 

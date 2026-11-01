@@ -66,6 +66,7 @@ def clean_phone(phone_str):
 
 def convert_tally_to_lead(raw_content, file_path="Master.xml"):
     date_key = resolve_dynamic_date_key(raw_content)
+    date_formatted = f"{date_key[6:8]}/{date_key[4:6]}/{date_key[:4]}"
 
     c_counter = 1001
     v_counter = 1001
@@ -84,7 +85,6 @@ def convert_tally_to_lead(raw_content, file_path="Master.xml"):
     # Try parsing XML if content starts with XML tags or contains <TALLYMESSAGE>
     if "<TALLYMESSAGE" in raw_content or "<ENVELOPE" in raw_content or file_path.endswith(".xml"):
         try:
-            # Clean possible XML headers
             xml_str = raw_content
             if "<ENVELOPE>" in xml_str:
                 xml_str = xml_str[xml_str.find("<ENVELOPE>"):xml_str.rfind("</ENVELOPE>")+11]
@@ -110,14 +110,18 @@ def convert_tally_to_lead(raw_content, file_path="Master.xml"):
 
                     cust_obj = {
                         "id": cust_id,
+                        "customerId": cust_id,
                         "customMiddleId": middle_id,
                         "externalName": name,
+                        "customerName": name,
                         "internalName": f"{name} - Tally Master Ledger",
                         "phone": phone,
+                        "phoneNumber": phone,
                         "accessPin": pin,
                         "email": "",
                         "openingBalance": op_bal,
                         "currentBalance": op_bal,
+                        "accountBalance": op_bal,
                         "billingAddress": address,
                         "installationAddress": address,
                         "gstin": gstin,
@@ -140,7 +144,13 @@ def convert_tally_to_lead(raw_content, file_path="Master.xml"):
 
                         inv_obj = {
                             "id": inv_id,
+                            "invoiceId": inv_id,
+                            "billId": inv_id,
+                            "customBillId": bill_ref,
+                            "billNumber": bill_ref,
+                            "invoiceDate": date_formatted,
                             "customerId": cust_id,
+                            "customerName": name,
                             "customerExternalName": name,
                             "customerPhone": phone,
                             "billingAddress": address,
@@ -159,15 +169,30 @@ def convert_tally_to_lead(raw_content, file_path="Master.xml"):
                             ],
                             "subtotal": subtotal,
                             "taxAmount": tax,
+                            "tax": tax,
                             "discountAmount": 0.0,
                             "roundOffAmount": 0.0,
                             "totalAmount": bill_amt,
+                            "finalAmount": bill_amt,
                             "prepaidSplits": {"fromBalance": 0.0, "upiCash": bill_amt},
                             "totalPrepaid": bill_amt,
                             "amountDue": 0.0,
                             "paymentStatus": "PAID",
+                            "status": "COMPLETED",
                             "notes": f"Auto-converted from Tally Bill {bill_ref}",
-                            "createdAt": datetime.now().isoformat()
+                            "createdAt": datetime.now().isoformat(),
+                            "customer": {
+                                "customerId": cust_id,
+                                "customerLegalName": name,
+                                "customerPhone": phone,
+                                "billingAddress": address,
+                                "installationAddress": address
+                            },
+                            "calculation": {
+                                "totalBill": bill_amt,
+                                "subtotal": subtotal,
+                                "tax": tax
+                            }
                         }
                         invoices.append(inv_obj)
 
@@ -176,9 +201,15 @@ def convert_tally_to_lead(raw_content, file_path="Master.xml"):
                         div_counter += 1
                         div_obj = {
                             "id": div_id,
+                            "deliveryId": div_id,
                             "invoiceIds": [inv_id],
+                            "linkedInvoiceIds": [inv_id],
                             "customerId": cust_id,
+                            "customerName": name,
+                            "customerExternalName": name,
+                            "customerPhone": phone,
                             "status": "Delivered & Installed",
+                            "divState": "6. Delivered & Installed",
                             "driverName": "Rajesh Kumar (Lead Logistics)",
                             "driverPhone": "+91 98250 11223",
                             "itemsSummary": f"1x Split AC Unit (Ref: {bill_ref})",
@@ -193,6 +224,7 @@ def convert_tally_to_lead(raw_content, file_path="Master.xml"):
                         tx_counter += 1
                         tx_obj = {
                             "id": tx_id,
+                            "transId": tx_id,
                             "customerId": cust_id,
                             "invoiceId": inv_id,
                             "type": "INFLOW",
@@ -200,6 +232,7 @@ def convert_tally_to_lead(raw_content, file_path="Master.xml"):
                             "referenceNo": bill_ref,
                             "bankOrDrawer": "HDFC Bank Ltd",
                             "amount": bill_amt,
+                            "amountInflow": bill_amt,
                             "treatment": "LINK_DIRECTLY_TO_INVOICE",
                             "notes": f"Tally Inflow Receipt for {bill_ref}",
                             "createdAt": datetime.now().isoformat()
@@ -211,18 +244,21 @@ def convert_tally_to_lead(raw_content, file_path="Master.xml"):
                     ven_id = f"V{date_key}{v_counter}"
                     v_counter += 1
 
-                    cat = "SUPPLIER_STOCK"
+                    cat = "Supplier Stock / Consignment"
                     if "LABOR" in name.upper() or "WAGE" in name.upper():
-                        cat = "INSTALLATION_LABOR"
+                        cat = "Installation / Labor Wages"
                         
                     ven_obj = {
                         "id": ven_id,
+                        "vendorId": ven_id,
                         "vendorName": name,
                         "category": cat,
                         "partyPhone": phone,
                         "billOrderReferenceNo": f"PO-{ven_id}",
                         "targetDueDate": f"{date_key[:4]}-{date_key[4:6]}-28",
+                        "amount": op_bal,
                         "amountWeOwe": op_bal,
+                        "status": "PENDING",
                         "notes": f"Tally Creditor ({parent})",
                         "createdAt": datetime.now().isoformat()
                     }
@@ -238,16 +274,26 @@ def convert_tally_to_lead(raw_content, file_path="Master.xml"):
 
                 stk_obj = {
                     "id": stk_id,
+                    "stockId": stk_id,
                     "name": stk_name,
+                    "productFullName": stk_name,
+                    "sku": f"SKU-{stk_id[-6:]}-01",
                     "modelNo": f"MOD-{stk_id[-4:]}",
                     "indoorModel": f"ID-{stk_id[-4:]}",
                     "outdoorModel": f"OD-{stk_id[-4:]}",
                     "type": "Inverter Split AC",
+                    "applianceType": "AC",
                     "brand": "Daikin",
                     "serialNo": f"SN{stk_id}",
                     "indoorUnitSerial": f"ID-SN{stk_id}",
                     "outdoorUnitSerial": f"OD-SN{stk_id}",
+                    "rate": price,
+                    "price": price,
                     "sellingPrice": price,
+                    "quantity": 1,
+                    "status": "AVAILABLE",
+                    "stockState": "ava",
+                    "hasQrCode": True,
                     "createdAt": datetime.now().isoformat()
                 }
                 store_stock.append(stk_obj)
@@ -259,14 +305,18 @@ def convert_tally_to_lead(raw_content, file_path="Master.xml"):
     if not customers:
         customers.append({
             "id": f"C{date_key}1001",
+            "customerId": f"C{date_key}1001",
             "customMiddleId": "VIP-CORP",
             "externalName": "NEXUS INFRASTRUCTURE PRIVATE LIMITED",
+            "customerName": "NEXUS INFRASTRUCTURE PRIVATE LIMITED",
             "internalName": "Nexus Infra - Tally Ledger",
             "phone": "+91 98250 27209",
+            "phoneNumber": "+91 98250 27209",
             "accessPin": "4037",
             "email": "contact@nexusinfra.in",
             "openingBalance": 145000.0,
             "currentBalance": 145000.0,
+            "accountBalance": 145000.0,
             "billingAddress": "702, Nexus Tower, SG Highway, Ahmedabad",
             "installationAddress": "702, Nexus Tower, SG Highway, Ahmedabad",
             "gstin": "24AAACN1234F1Z5",
@@ -276,12 +326,15 @@ def convert_tally_to_lead(raw_content, file_path="Master.xml"):
     if not vendors:
         vendors.append({
             "id": f"V{date_key}1001",
+            "vendorId": f"V{date_key}1001",
             "vendorName": "DAIKIN AIRCONDITIONING INDIA PVT LTD",
-            "category": "SUPPLIER_STOCK",
+            "category": "Supplier Stock / Consignment",
             "partyPhone": "+91 99980 21446",
             "billOrderReferenceNo": f"PO-V{date_key}1001",
             "targetDueDate": f"{date_key[:4]}-{date_key[4:6]}-30",
+            "amount": 285000.0,
             "amountWeOwe": 285000.0,
+            "status": "PENDING",
             "notes": "Daikin Factory Stock Purchase",
             "createdAt": datetime.now().isoformat()
         })
@@ -289,27 +342,47 @@ def convert_tally_to_lead(raw_content, file_path="Master.xml"):
     if not store_stock:
         store_stock.append({
             "id": f"STK{date_key}1001",
+            "stockId": f"STK{date_key}1001",
             "name": "Daikin 1.5 Ton 5 Star Inverter Split AC",
+            "productFullName": "Daikin 1.5 Ton 5 Star Inverter Split AC",
+            "sku": f"SKU-{date_key}1001",
             "modelNo": "FTKM50U",
             "indoorModel": "FTKM50UVM16",
             "outdoorModel": "RKM50UVM16",
             "type": "Inverter Split AC",
+            "applianceType": "AC",
             "brand": "Daikin",
             "serialNo": f"SN{date_key}1001",
             "indoorUnitSerial": f"IDSN{date_key}1001",
             "outdoorUnitSerial": f"ODSN{date_key}1001",
+            "rate": 45500.0,
+            "price": 45500.0,
             "sellingPrice": 45500.0,
+            "quantity": 1,
+            "status": "AVAILABLE",
+            "stockState": "ava",
+            "hasQrCode": True,
             "createdAt": datetime.now().isoformat()
         })
 
     result = {
+        "companyInfo": {
+            "companyName": STORE_CONSTANTS["companyName"],
+            "storeGstin": STORE_CONSTANTS["storeGstin"],
+            "storeHelpline": STORE_CONSTANTS["storeHelpline"],
+            "baseDate": date_key,
+            "version": "LEA-D 4.0 Standard"
+        },
         "storeProfile": STORE_CONSTANTS,
         "dateKey": date_key,
         "exportTimestamp": datetime.now().isoformat(),
         "customers": customers,
         "vendors": vendors,
         "storeStock": store_stock,
+        "inventory": store_stock,
+        "stock": store_stock,
         "invoices": invoices,
+        "bills": invoices,
         "deliveries": deliveries,
         "transactions": transactions
     }
@@ -321,7 +394,6 @@ def main():
     print("  LEA-D 4.0 SYSTEM DATA CONVERTER & MIGRATION ENGINE (PYTHON)  ")
     print("===================================================================")
 
-    # Search for Master.xml or Tally XML files in workspace
     target_files = ["Master.xml", "public/assets/aistudio/Master_f342a154.xml", "Master_f342a154.xml", "Tally.xml"]
     found_content = ""
     found_path = ""
@@ -373,6 +445,8 @@ def main():
     with open(js_path, "w", encoding="utf-8") as f:
         f.write(js_content)
     print(f"✓ Successfully generated: {js_path}")
+
+    # Also copy to root as tally_to_lead_converter.py if needed
     print("===================================================================")
     print("  CONVERSION & GENERATION COMPLETE  ")
     print("===================================================================")

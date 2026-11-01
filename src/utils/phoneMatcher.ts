@@ -1,6 +1,20 @@
 import { Customer } from '../types';
 
 /**
+ * Safely format phone number with fallback for null / undefined
+ */
+export function formatPhone(phone?: string | null): string {
+  if (!phone) return '';
+  const str = String(phone).trim();
+  if (!str) return '';
+  const raw = extractRawPhone(str);
+  if (raw.length === 10) {
+    return `+91 ${raw.slice(0, 5)} ${raw.slice(5)}`;
+  }
+  return str;
+}
+
+/**
  * Normalizes input by extracting the raw 10-digit Indian mobile number.
  * Handles:
  * - "+91 98765-43210" -> "9876543210"
@@ -9,10 +23,11 @@ import { Customer } from '../types';
  * - "919876543210" -> "9876543210"
  * - "9876543210" -> "9876543210"
  */
-export function extractRawPhone(input: string): string {
+export function extractRawPhone(input?: string | null): string {
   if (!input) return '';
+  const str = String(input);
   // Remove all non-numeric characters
-  const digits = input.replace(/\D/g, '');
+  const digits = str.replace(/\D/g, '');
   if (!digits) return '';
 
   // If starts with 91 and has 12 digits, strip 91

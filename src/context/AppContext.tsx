@@ -269,15 +269,55 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'));
   };
 
-  // Data Collections (No pre-set values, starts completely empty)
-  const [customers, setCustomers] = useState<Customer[]>([]);
-  const [quotations, setQuotations] = useState<Quotation[]>([]);
-  const [invoices, setInvoices] = useState<Invoice[]>([]);
-  const [inventory, setInventory] = useState<InventoryItem[]>([]);
-  const [shipments, setShipments] = useState<Shipment[]>([]);
-  const [transactions, setTransactions] = useState<TransactionRecord[]>([]);
-  const [claims, setClaims] = useState<VerificationClaim[]>([]);
-  const [payables, setPayables] = useState<PayableRecord[]>([]);
+  // Data Collections (Initialized instantly from localStorage cache if available for instant page opening)
+  const [customers, setCustomers] = useState<Customer[]>(() => {
+    try {
+      const cached = localStorage.getItem('lakhi_cache_customers');
+      return cached ? JSON.parse(cached) : [];
+    } catch { return []; }
+  });
+  const [quotations, setQuotations] = useState<Quotation[]>(() => {
+    try {
+      const cached = localStorage.getItem('lakhi_cache_quotations');
+      return cached ? JSON.parse(cached) : [];
+    } catch { return []; }
+  });
+  const [invoices, setInvoices] = useState<Invoice[]>(() => {
+    try {
+      const cached = localStorage.getItem('lakhi_cache_invoices');
+      return cached ? JSON.parse(cached) : [];
+    } catch { return []; }
+  });
+  const [inventory, setInventory] = useState<InventoryItem[]>(() => {
+    try {
+      const cached = localStorage.getItem('lakhi_cache_inventory');
+      return cached ? JSON.parse(cached) : [];
+    } catch { return []; }
+  });
+  const [shipments, setShipments] = useState<Shipment[]>(() => {
+    try {
+      const cached = localStorage.getItem('lakhi_cache_shipments');
+      return cached ? JSON.parse(cached) : [];
+    } catch { return []; }
+  });
+  const [transactions, setTransactions] = useState<TransactionRecord[]>(() => {
+    try {
+      const cached = localStorage.getItem('lakhi_cache_transactions');
+      return cached ? JSON.parse(cached) : [];
+    } catch { return []; }
+  });
+  const [claims, setClaims] = useState<VerificationClaim[]>(() => {
+    try {
+      const cached = localStorage.getItem('lakhi_cache_claims');
+      return cached ? JSON.parse(cached) : [];
+    } catch { return []; }
+  });
+  const [payables, setPayables] = useState<PayableRecord[]>(() => {
+    try {
+      const cached = localStorage.getItem('lakhi_cache_payables');
+      return cached ? JSON.parse(cached) : [];
+    } catch { return []; }
+  });
 
   // List of Admin UIDs and Store Config in Firebase
   const [adminUids, setAdminUids] = useState<string[]>([]);
@@ -477,7 +517,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  // 4. Real-time Firestore Listeners: Continuously synchronize master collections
+  // 4. Real-time Firestore Listeners: Continuously synchronize master collections & local cache
   useEffect(() => {
     const unsubCustomers = onSnapshot(
       collection(db, 'customers'),
@@ -485,6 +525,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const list: Customer[] = [];
         snapshot.forEach((d) => list.push({ ...d.data(), id: d.id } as Customer));
         setCustomers(list);
+        try { localStorage.setItem('lakhi_cache_customers', JSON.stringify(list)); } catch {}
       },
       (error) => handleFirestoreError(error, OperationType.LIST, 'customers', false)
     );
@@ -495,6 +536,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const list: Quotation[] = [];
         snapshot.forEach((d) => list.push({ ...d.data(), id: d.id } as Quotation));
         setQuotations(list);
+        try { localStorage.setItem('lakhi_cache_quotations', JSON.stringify(list)); } catch {}
       },
       (error) => handleFirestoreError(error, OperationType.LIST, 'quotations', false)
     );
@@ -505,6 +547,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const list: Invoice[] = [];
         snapshot.forEach((d) => list.push({ ...d.data(), id: d.id } as Invoice));
         setInvoices(list);
+        try { localStorage.setItem('lakhi_cache_invoices', JSON.stringify(list)); } catch {}
       },
       (error) => handleFirestoreError(error, OperationType.LIST, 'invoices', false)
     );
@@ -515,6 +558,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const list: InventoryItem[] = [];
         snapshot.forEach((d) => list.push({ ...d.data(), id: d.id } as InventoryItem));
         setInventory(list);
+        try { localStorage.setItem('lakhi_cache_inventory', JSON.stringify(list)); } catch {}
       },
       (error) => handleFirestoreError(error, OperationType.LIST, 'inventory', false)
     );
@@ -525,6 +569,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const list: Shipment[] = [];
         snapshot.forEach((d) => list.push({ ...d.data(), id: d.id } as Shipment));
         setShipments(list);
+        try { localStorage.setItem('lakhi_cache_shipments', JSON.stringify(list)); } catch {}
       },
       (error) => handleFirestoreError(error, OperationType.LIST, 'shipments', false)
     );
@@ -535,6 +580,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const list: TransactionRecord[] = [];
         snapshot.forEach((d) => list.push({ ...d.data(), id: d.id } as TransactionRecord));
         setTransactions(list);
+        try { localStorage.setItem('lakhi_cache_transactions', JSON.stringify(list)); } catch {}
       },
       (error) => handleFirestoreError(error, OperationType.LIST, 'transactions', false)
     );
@@ -545,6 +591,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const list: VerificationClaim[] = [];
         snapshot.forEach((d) => list.push({ ...d.data(), id: d.id } as VerificationClaim));
         setClaims(list);
+        try { localStorage.setItem('lakhi_cache_claims', JSON.stringify(list)); } catch {}
       },
       (error) => handleFirestoreError(error, OperationType.LIST, 'claims', false)
     );
@@ -555,6 +602,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const list: PayableRecord[] = [];
         snapshot.forEach((d) => list.push({ ...d.data(), id: d.id } as PayableRecord));
         setPayables(list);
+        try { localStorage.setItem('lakhi_cache_payables', JSON.stringify(list)); } catch {}
       },
       (error) => handleFirestoreError(error, OperationType.LIST, 'payables', false)
     );

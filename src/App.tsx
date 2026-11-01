@@ -16,6 +16,7 @@ import { Quotation, Invoice } from './types';
 import { BrandLogoManager } from './components/staff/BrandLogoManager';
 import { BrandLogoModal } from './components/common/BrandLogoModal';
 import { TallyPrimeManager } from './components/staff/TallyPrimeManager';
+import { StaffNavigation } from './components/staff/StaffNavigation';
 import {
   Zap,
   FileCheck2,
@@ -35,14 +36,50 @@ import { generateInvoicePdf, generateQuotationPdf } from './utils/pdfGenerator';
 import { resolvePdfLinks } from './utils/cloudPdfHelper';
 import { PdfPreviewModal } from './components/common/PdfPreviewModal';
 import { AiAssistantDrawer } from './components/common/AiAssistantDrawer';
+import { CommandPaletteModal } from './components/common/CommandPaletteModal';
+import { KeyboardShortcutsModal } from './components/common/KeyboardShortcutsModal';
+import { StaffDataLoaderOverlay } from './components/staff/StaffDataLoaderOverlay';
 
 function MainApp() {
-  const { viewMode, claims, theme, isAdmin, invoices, quotations, gstNumber } = useApp();
+  const { viewMode, claims, theme, toggleTheme, setViewMode, isAdmin, invoices, quotations, gstNumber } = useApp();
 
   // Navigation tab for staff - Quick Mode is first tab as requested
   const [activeStaffTab, setActiveStaffTab] = useState<string>('quick');
+  const [showStaffLoader, setShowStaffLoader] = useState<boolean>(true);
+  const [navLayoutMode, setNavLayoutMode] = useState<'top' | 'sidebar'>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('lakhi_staff_nav_layout');
+      if (saved === 'sidebar' || saved === 'top') return saved;
+    }
+    return 'top';
+  });
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('lakhi_staff_sidebar_collapsed') === 'true';
+    }
+    return false;
+  });
   const [isAiDrawerOpen, setIsAiDrawerOpen] = useState(false);
   const [isBrandModalOpen, setIsBrandModalOpen] = useState(false);
+  const [isCommandPaletteOpen, setIsCommandPaletteOpen] = useState(false);
+  const [isShortcutsModalOpen, setIsShortcutsModalOpen] = useState(false);
+
+  const handleToggleLayoutMode = (mode: 'top' | 'sidebar') => {
+    setNavLayoutMode(mode);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('lakhi_staff_nav_layout', mode);
+    }
+  };
+
+  const handleToggleSidebarCollapse = () => {
+    setIsSidebarCollapsed((prev) => {
+      const next = !prev;
+      if (typeof window !== 'undefined') {
+        localStorage.setItem('lakhi_staff_sidebar_collapsed', String(next));
+      }
+      return next;
+    });
+  };
 
   // Cross-workflow state passing
   const [quoteToConvert, setQuoteToConvert] = useState<Quotation | null>(null);
@@ -54,6 +91,163 @@ function MainApp() {
   const [directPreviewTitle, setDirectPreviewTitle] = useState('');
   const [directPreviewFilename, setDirectPreviewFilename] = useState('');
   const [isDirectPreviewOpen, setIsDirectPreviewOpen] = useState(false);
+
+  // Global Keyboard Navigation & Hotkeys Handler
+  useEffect(() => {
+    const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      // 1. Command Palette: Ctrl+K or Cmd+K
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        setIsCommandPaletteOpen((prev) => !prev);
+        setIsShortcutsModalOpen(false);
+        return;
+      }
+
+      // 2. Escape: Dismiss open modals/drawers
+      if (e.key === 'Escape') {
+        if (isCommandPaletteOpen) {
+          setIsCommandPaletteOpen(false);
+          return;
+        }
+        if (isShortcutsModalOpen) {
+          setIsShortcutsModalOpen(false);
+          return;
+        }
+        if (isAiDrawerOpen) {
+          setIsAiDrawerOpen(false);
+          return;
+        }
+        if (isBrandModalOpen) {
+          setIsBrandModalOpen(false);
+          return;
+        }
+        if (isDirectPreviewOpen) {
+          setIsDirectPreviewOpen(false);
+          return;
+        }
+      }
+
+      // Check if user is typing in a form input, textarea, select, or contentEditable
+      const target = e.target as HTMLElement | null;
+      const isInput =
+        target &&
+        (target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.tagName === 'SELECT' ||
+          target.isContentEditable);
+
+      // 3. Alt+ Shortcuts (Global ERP hotkeys)
+      if (e.altKey && !e.ctrlKey && !e.metaKey) {
+        const key = e.key.toLowerCase();
+        if (key === '1') {
+          e.preventDefault();
+          setActiveStaffTab('quick');
+        } else if (key === '2') {
+          e.preventDefault();
+          setActiveStaffTab('quotations');
+        } else if (key === '3') {
+          e.preventDefault();
+          setActiveStaffTab('invoices');
+        } else if (key === '4') {
+          e.preventDefault();
+          setActiveStaffTab('inventory');
+        } else if (key === '5') {
+          e.preventDefault();
+          setActiveStaffTab('lead_hub');
+        } else if (key === '6') {
+          e.preventDefault();
+          setActiveStaffTab('shipments');
+        } else if (key === '7') {
+          e.preventDefault();
+          setActiveStaffTab('customers');
+        } else if (key === '8') {
+          e.preventDefault();
+          setActiveStaffTab('khata');
+        } else if (key === '9') {
+          e.preventDefault();
+          setActiveStaffTab('claims');
+        } else if (key === '0') {
+          e.preventDefault();
+          setIsBrandModalOpen(true);
+        } else if (key === 'u') {
+          e.preventDefault();
+          setActiveStaffTab('admins');
+        } else if (key === 'n') {
+          e.preventDefault();
+          setActiveStaffTab('invoices');
+        } else if (key === 'q') {
+          e.preventDefault();
+          setActiveStaffTab('quotations');
+        } else if (key === 'a') {
+          e.preventDefault();
+          setIsAiDrawerOpen((prev) => !prev);
+        } else if (key === 't') {
+          e.preventDefault();
+          toggleTheme();
+        } else if (key === 'p') {
+          e.preventDefault();
+          if (isAdmin) {
+            setViewMode(viewMode === 'STAFF' ? 'CUSTOMER' : 'STAFF');
+          }
+        } else if (key === 'l') {
+          e.preventDefault();
+          handleToggleLayoutMode(navLayoutMode === 'top' ? 'sidebar' : 'top');
+        }
+        return;
+      }
+
+      // 4. Ctrl+J for Lakhi AI Assistant
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'j') {
+        e.preventDefault();
+        setIsAiDrawerOpen((prev) => !prev);
+        return;
+      }
+
+      // 5. Bare keys (only when NOT typing inside an input)
+      if (!isInput && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        if (e.key === '?') {
+          e.preventDefault();
+          setIsShortcutsModalOpen((prev) => !prev);
+          setIsCommandPaletteOpen(false);
+          return;
+        }
+
+        // Direct number keys 1-9 for instant module jump
+        if (viewMode === 'STAFF' && isAdmin) {
+          const numMap: Record<string, string> = {
+            '1': 'quick',
+            '2': 'quotations',
+            '3': 'invoices',
+            '4': 'inventory',
+            '5': 'lead_hub',
+            '6': 'shipments',
+            '7': 'customers',
+            '8': 'khata',
+            '9': 'claims',
+            '0': 'branding',
+          };
+          if (numMap[e.key]) {
+            e.preventDefault();
+            setActiveStaffTab(numMap[e.key]);
+          }
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleGlobalKeyDown);
+    return () => window.removeEventListener('keydown', handleGlobalKeyDown);
+  }, [
+    isCommandPaletteOpen,
+    isShortcutsModalOpen,
+    isAiDrawerOpen,
+    isBrandModalOpen,
+    isDirectPreviewOpen,
+    viewMode,
+    isAdmin,
+    navLayoutMode,
+    toggleTheme,
+    setViewMode,
+  ]);
 
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -111,120 +305,97 @@ function MainApp() {
     setActiveStaffTab('shipments');
   };
 
-  const staffNavItems = [
-    { id: 'quick', label: '⚡ Quick Mode', icon: Zap },
-    { id: 'quotations', label: 'Quotes (Q...)', icon: FileCheck2 },
-    { id: 'invoices', label: 'Billing & Invoices (I...)', icon: Receipt },
-    { id: 'inventory', label: 'Store Stock', icon: Boxes },
-    { id: 'lead_hub', label: '⚡ LA-D Data Hub', icon: Zap },
-    { id: 'shipments', label: 'Deliveries & Tracking (D...)', icon: Truck },
-    { id: 'customers', label: 'Customers & Ledger (C/T...)', icon: Users },
-    { id: 'khata', label: 'Who Owes Who (Dues & Khata)', icon: Scale },
-    {
-      id: 'claims',
-      label: '72h Claims',
-      icon: Clock,
-      badge: pendingClaimsCount > 0 ? pendingClaimsCount : undefined,
-    },
-    { id: 'branding', label: '🎨 Brand & Logos', icon: Palette },
-    { id: 'admins', label: 'Admin UIDs List', icon: ShieldCheck },
-  ];
-
   return (
     <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100 flex flex-col font-sans transition-colors duration-200">
       <Header
         onOpenClaimsModal={() => setActiveStaffTab('claims')}
         onOpenAiAssistant={() => setIsAiDrawerOpen(true)}
         onOpenBrandModal={() => setIsBrandModalOpen(true)}
+        onOpenCommandPalette={() => setIsCommandPaletteOpen(true)}
+        onOpenShortcutsModal={() => setIsShortcutsModalOpen(true)}
       />
 
       {/* Staff Operations: strictly visible only for authorized Admins */}
       {viewMode === 'STAFF' && isAdmin ? (
-        <div className="flex-1 max-w-7xl w-full mx-auto px-2.5 sm:px-6 lg:px-8 py-4 sm:py-6 space-y-4 sm:space-y-6">
-          {/* Sub Navigation Bar for Staff */}
-          <nav className="bg-white dark:bg-slate-900 p-1 sm:p-1.5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xs flex items-center gap-1 overflow-x-auto scrollbar-none">
-            {staffNavItems.map((item) => {
-              const Icon = item.icon;
-              const isActive = activeStaffTab === item.id;
-              return (
-                <button
-                  key={item.id}
-                  onClick={() => setActiveStaffTab(item.id)}
-                  className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all ${
-                    isActive
-                      ? 'bg-red-600 text-white shadow-sm shadow-red-600/30'
-                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-950 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800'
-                  }`}
-                >
-                  <Icon className={`w-4 h-4 ${isActive ? 'text-white' : 'text-slate-400 dark:text-slate-500'}`} />
-                  <span>{item.label}</span>
-                  {item.badge && (
-                    <span className="bg-white text-red-700 text-[10px] font-black px-1.5 py-0.2 rounded-full">
-                      {item.badge}
-                    </span>
-                  )}
-                </button>
-              );
-            })}
-          </nav>
-
-          {/* Active Staff Tab Component */}
-          {activeStaffTab === 'quick' && (
-            <QuickMode
-              onNavigateTab={(tab) => setActiveStaffTab(tab)}
-              onConvertToInvoice={handleConvertToInvoice}
-              onShipInvoice={handleShipInvoice}
-              onOpenAiAssistant={() => setIsAiDrawerOpen(true)}
-              onOpenBarcodeScanner={() => setActiveStaffTab('inventory')}
-            />
+        <>
+          {showStaffLoader && (
+            <StaffDataLoaderOverlay onDismiss={() => setShowStaffLoader(false)} />
           )}
+          <div
+            className={`flex-1 w-full mx-auto px-2.5 sm:px-6 lg:px-8 py-4 sm:py-6 ${
+              navLayoutMode === 'sidebar'
+                ? 'max-w-[1600px] flex flex-col md:flex-row gap-4 sm:gap-6 items-start'
+                : 'max-w-7xl space-y-4 sm:space-y-6'
+            }`}
+          >
+          {/* Staff Navigation Bar / Sidebar with Grouped Categories & Layout Modes */}
+          <StaffNavigation
+            activeTab={activeStaffTab}
+            onSelectTab={(tab) => setActiveStaffTab(tab)}
+            pendingClaimsCount={pendingClaimsCount}
+            layoutMode={navLayoutMode}
+            onToggleLayoutMode={handleToggleLayoutMode}
+            isSidebarCollapsed={isSidebarCollapsed}
+            onToggleSidebarCollapse={handleToggleSidebarCollapse}
+            onOpenAiAssistant={() => setIsAiDrawerOpen(true)}
+          />
 
-          {activeStaffTab === 'quotations' && (
-            <QuotationManager onConvertToInvoice={handleConvertToInvoice} />
-          )}
+          {/* Active Staff Tab Component Content */}
+          <main className="flex-1 w-full min-w-0">
+            {activeStaffTab === 'quick' && (
+              <QuickMode
+                onNavigateTab={(tab) => setActiveStaffTab(tab)}
+                onConvertToInvoice={handleConvertToInvoice}
+                onShipInvoice={handleShipInvoice}
+                onOpenAiAssistant={() => setIsAiDrawerOpen(true)}
+                onOpenBarcodeScanner={() => setActiveStaffTab('inventory')}
+              />
+            )}
 
-          {activeStaffTab === 'invoices' && (
-            <InvoiceManager
-              initialQuoteToConvert={quoteToConvert}
-              onClearInitialQuote={() => setQuoteToConvert(null)}
-              initialStockItemToBill={stockItemToBill}
-              onClearInitialStock={() => setStockItemToBill(null)}
-              onOpenNewShipmentForInvoice={handleShipInvoice}
-            />
-          )}
+            {activeStaffTab === 'quotations' && (
+              <QuotationManager onConvertToInvoice={handleConvertToInvoice} />
+            )}
 
-          {activeStaffTab === 'inventory' && (
-            <InventoryGodown
-              onBillItem={(item) => {
-                setStockItemToBill(item);
-                setActiveStaffTab('invoices');
-              }}
-            />
-          )}
+            {activeStaffTab === 'invoices' && (
+              <InvoiceManager
+                initialQuoteToConvert={quoteToConvert}
+                onClearInitialQuote={() => setQuoteToConvert(null)}
+                initialStockItemToBill={stockItemToBill}
+                onClearInitialStock={() => setStockItemToBill(null)}
+                onOpenNewShipmentForInvoice={handleShipInvoice}
+              />
+            )}
 
-          {activeStaffTab === 'lead_hub' && (
-            <TallyPrimeManager />
-          )}
+            {activeStaffTab === 'inventory' && (
+              <InventoryGodown
+                onBillItem={(item) => {
+                  setStockItemToBill(item);
+                  setActiveStaffTab('invoices');
+                }}
+              />
+            )}
 
-          {activeStaffTab === 'shipments' && (
-            <ShipmentTracker
-              initialInvoiceToShip={invoiceToShip}
-              onClearInitialInvoice={() => setInvoiceToShip(null)}
-            />
-          )}
+            {activeStaffTab === 'lead_hub' && <TallyPrimeManager />}
 
-          {activeStaffTab === 'customers' && (
-            <CustomerLedger />
-          )}
+            {activeStaffTab === 'shipments' && (
+              <ShipmentTracker
+                initialInvoiceToShip={invoiceToShip}
+                onClearInitialInvoice={() => setInvoiceToShip(null)}
+              />
+            )}
 
-          {activeStaffTab === 'khata' && <DuesKhataManager />}
+            {activeStaffTab === 'customers' && <CustomerLedger />}
 
-          {activeStaffTab === 'claims' && <ClaimApprovals />}
+            {activeStaffTab === 'khata' && <DuesKhataManager />}
 
-          {activeStaffTab === 'branding' && <BrandLogoManager />}
+            {activeStaffTab === 'claims' && <ClaimApprovals />}
 
-          {activeStaffTab === 'admins' && <AdminUidManager />}
+            {activeStaffTab === 'branding' && <BrandLogoManager />}
+
+            {activeStaffTab === 'admins' && <AdminUidManager />}
+          </main>
         </div>
+        </>
       ) : (
         <div className="flex-1 max-w-7xl w-full mx-auto px-2.5 sm:px-6 lg:px-8 py-4 sm:py-6">
           <CustomerPortal />
@@ -291,10 +462,35 @@ function MainApp() {
         title={directPreviewTitle}
       />
 
-      {/* Brand Logos Customizer Modal */}
-      <BrandLogoModal
-        isOpen={isBrandModalOpen}
-        onClose={() => setIsBrandModalOpen(false)}
+      {/* Global Keyboard Command Palette (Ctrl+K or Cmd+K) */}
+      <CommandPaletteModal
+        isOpen={isCommandPaletteOpen}
+        onClose={() => setIsCommandPaletteOpen(false)}
+        onNavigateTab={(tab) => {
+          setActiveStaffTab(tab);
+          setIsCommandPaletteOpen(false);
+        }}
+        onOpenAiAssistant={() => {
+          setIsAiDrawerOpen(true);
+          setIsCommandPaletteOpen(false);
+        }}
+        onOpenBrandModal={() => {
+          setIsBrandModalOpen(true);
+          setIsCommandPaletteOpen(false);
+        }}
+        onOpenShortcutsHelp={() => {
+          setIsShortcutsModalOpen(true);
+          setIsCommandPaletteOpen(false);
+        }}
+        onToggleLayout={() => {
+          handleToggleLayoutMode(navLayoutMode === 'top' ? 'sidebar' : 'top');
+        }}
+      />
+
+      {/* Keyboard Shortcuts Cheatsheet Modal (?) */}
+      <KeyboardShortcutsModal
+        isOpen={isShortcutsModalOpen}
+        onClose={() => setIsShortcutsModalOpen(false)}
       />
 
       {/* PWA Offline Connectivity Indicator */}

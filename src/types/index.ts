@@ -139,11 +139,14 @@ export type PaymentStatus = 'PAID' | 'PARTIAL' | 'UNPAID';
 export interface Invoice {
   id: string; // e.g., I202610271001
   invoiceId?: string;
+  billId?: string;
   customBillId?: string;
+  billNumber?: string;
   invoiceDate?: string; // "27/10/2026"
   linkQuoteId?: string;
   storeGstin?: string; // "24AAIPU5764D1ZI"
   customerId: string;
+  customerName?: string;
   customerExternalName: string;
   customerPhone: string;
   billingAddress: string;
@@ -156,13 +159,16 @@ export interface Invoice {
   items: InvoiceLineItem[];
   subtotal: number;
   taxAmount: number;
+  tax?: number;
   discountAmount: number;
   roundOffAmount?: number; // Round off adjustment (+/-)
   totalAmount: number;
+  finalAmount?: number;
   prepaidSplits: PrepaidSplits;
   totalPrepaid: number;
   amountDue: number; // totalAmount - totalPrepaid
   paymentStatus: PaymentStatus;
+  status?: string; // "COMPLETED"
   pdfLink?: string; // Stored PDF view link
   pdfProvider?: PdfProviderType;
   pdfDriveId?: string;
@@ -171,6 +177,8 @@ export interface Invoice {
   gstNumber?: string;
   notes?: string;
   paymentTransId?: string; // Payment transaction ID / UTR / Reference
+  customer?: any;
+  calculation?: any;
   createdAt: string;
   updatedAt?: string;
 }
@@ -184,7 +192,7 @@ export interface InventoryItem {
   stockId?: string; // STK20261027XXXX
   sku?: string;
   websiteStockId?: string;
-  applianceType?: 'AC' | 'Appliance' | 'TV';
+  applianceType?: string;
   name: string; // Product name / productFullName
   productFullName?: string;
   modelNo: string; // Model number / setModelNumber
@@ -202,6 +210,8 @@ export interface InventoryItem {
   barcodeAdded?: boolean; // Set to true when internal barcode is made/printed
   barcodePrintedAt?: string; // Timestamp when barcode was marked as printed
   hasQrCode?: boolean;
+  rate?: number;
+  price?: number;
   sellingPrice: number;
   quantity?: number;
   status: StockStatus; // AVAILABLE, SOLD, or ARCHIVED
@@ -389,8 +399,11 @@ export interface LeadCompleteSystemData {
   customers: Customer[];
   vendors: Vendor[];
   storeStock: InventoryItem[];
+  inventory?: InventoryItem[];
+  stock?: InventoryItem[];
   deliveries: Shipment[];
   invoices: Invoice[];
+  bills?: Invoice[];
   transactions: TransactionRecord[];
   tallyMasters: TallyMastersData;
 }

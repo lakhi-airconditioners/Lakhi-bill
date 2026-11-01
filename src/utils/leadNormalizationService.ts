@@ -157,6 +157,112 @@ function getXmlTag(el: Element, tagName: string): string {
   return '';
 }
 
+// 1. Normalize Invoices
+export function normalizeInvoice(raw: any) {
+  if (!raw) raw = {};
+  const total = Number(raw.totalAmount ?? raw.finalAmount ?? raw.calculation?.totalBill ?? 0);
+  const subtotal = Number(raw.subtotal ?? raw.calculation?.subtotal ?? Math.round((total / 1.18) * 100) / 100);
+  const tax = Number(raw.tax ?? raw.calculation?.tax ?? Math.round((total - subtotal) * 100) / 100);
+
+  return {
+    ...raw,
+    id: raw.id || raw.invoiceId || `INV-${Date.now()}`,
+    invoiceId: raw.invoiceId || raw.id || '',
+    customBillId: raw.customBillId || raw.billNumber || '',
+    customerId: raw.customerId || raw.customer?.customerId || '',
+    customerName: raw.customerName || raw.customer?.customerLegalName || 'Unknown Customer',
+    customerPhone: raw.customerPhone || raw.customer?.customerPhone || '',
+    billingAddress: raw.billingAddress || raw.customer?.billingAddress || '',
+    invoiceDate: String(raw.invoiceDate || new Date().toLocaleDateString('en-GB')),
+
+    // Prevent .toLocaleString() crash
+    totalAmount: isNaN(total) ? 0 : total,
+    finalAmount: isNaN(total) ? 0 : total,
+    subtotal: isNaN(subtotal) ? 0 : subtotal,
+    tax: isNaN(tax) ? 0 : tax,
+
+    // Prevent .map() crash
+    items: Array.isArray(raw.items)
+      ? raw.items
+      : [
+          {
+            description: raw.itemsSummary || 'General Equipment',
+            quantity: 1,
+            rate: isNaN(total) ? 0 : total,
+            amount: isNaN(total) ? 0 : total,
+          },
+        ],
+    itemsSummary: raw.itemsSummary || '1x Equipment Unit',
+  };
+}
+
+// 2. Normalize Deliveries (div)
+export function normalizeDelivery(raw: any) {
+  if (!raw) raw = {};
+  return {
+    ...raw,
+    id: raw.id || raw.deliveryId || `DIV-${Date.now()}`,
+    deliveryId: raw.deliveryId || raw.id || '',
+    customerId: raw.customerId || '',
+    customerName: raw.customerName || '',
+    divState: raw.divState || '1. Order Placed',
+
+    // Prevent .map() crash
+    linkedInvoiceIds: Array.isArray(raw.linkedInvoiceIds)
+      ? raw.linkedInvoiceIds
+      : raw.linkedInvoiceId
+      ? [raw.linkedInvoiceId]
+      : [],
+    messageNotes: Array.isArray(raw.messageNotes) ? raw.messageNotes : [],
+
+    // Prevent .replace() crash on driver phone
+    driverName: raw.driverName || raw.assignedDriver?.driverName || 'Unassigned',
+    driverPhone: raw.driverPhone || raw.assignedDriver?.driverPhone || '',
+    vehicleNumber: raw.vehicleNumber || raw.assignedDriver?.vehicleNumber || '',
+  };
+}
+
+// 3. Normalize Customers
+export function normalizeCustomer(raw: any) {
+  if (!raw) raw = {};
+  const balance = Number(raw.currentBalance ?? raw.openingBalance ?? 0);
+  return {
+    ...raw,
+    id: raw.id || raw.customerId || `CUST-${Date.now()}`,
+    customerId: raw.customerId || raw.id || '',
+    externalName: raw.externalName || raw.name || 'Unnamed Customer',
+    phone: raw.phone || raw.phoneNumber || raw.partyPhone || '',
+    email: raw.email || '',
+    billingAddress: raw.billingAddress || raw.address || '',
+    currentBalance: isNaN(balance) ? 0 : balance,
+    openingBalance: isNaN(balance) ? 0 : balance,
+    transactions: Array.isArray(raw.transactions) ? raw.transactions : [],
+    gstin: raw.gstin || '',
+    pan: raw.pan || '',
+  };
+}
+
+// 4. Normalize Stock Items
+export function normalizeStock(raw: any) {
+  if (!raw) raw = {};
+  const price = Number(raw.sellingPrice ?? raw.rate ?? raw.price ?? 0);
+  return {
+    ...raw,
+    id: raw.id || raw.stockId || `STK-${Date.now()}`,
+    stockId: raw.stockId || raw.id || '',
+    name: raw.name || raw.productFullName || 'General Equipment',
+    productFullName: raw.productFullName || raw.name || 'General Equipment',
+    sellingPrice: isNaN(price) ? 0 : price,
+    rate: isNaN(price) ? 0 : price,
+    price: isNaN(price) ? 0 : price,
+    quantity: Number(raw.quantity ?? 1),
+    status: raw.status || 'AVAILABLE',
+    stockState: raw.stockState || 'ava',
+    brand: raw.brand || 'DAIKIN',
+    applianceType: raw.applianceType || raw.type || 'AC',
+  };
+}
+
 /**
  * Main Data Normalization Engine: Transform raw Tally payload (XML/CSV/JSON/TXT)
  * strictly into LEA-D 4.0 deterministic structures.
@@ -310,11 +416,14 @@ export function normalizeTallyToLeadData(
             invoices.push({
               id: invId,
               invoiceId: invId,
+              billId: invId,
               customBillId: billRefName,
+              billNumber: billRefName,
               invoiceDate: dateResolution.formattedDate,
               linkQuoteId: '',
               storeGstin: STORE_CONSTANTS.storeGstin,
               customerId,
+              customerName: name,
               customerExternalName: name,
               customerPhone: phone || '+91 99980 21446',
               billingAddress: address,
@@ -342,9 +451,11 @@ export function normalizeTallyToLeadData(
               ],
               subtotal,
               taxAmount,
+              tax: taxAmount,
               discountAmount: 0,
               roundOffAmount: 0,
               totalAmount: billAmt,
+              finalAmount: billAmt,
               prepaidSplits: {
                 fromBalance: 0,
                 upi: { amount: billAmt, receivingBank: 'HDFC Bank', utr: `UTR-${invId.slice(-6)}` },
@@ -355,7 +466,20 @@ export function normalizeTallyToLeadData(
               totalPrepaid: billAmt,
               amountDue: 0,
               paymentStatus: 'PAID',
+              status: 'COMPLETED',
               createdAt: dateResolution.formattedDate,
+              customer: {
+                customerId,
+                customerLegalName: name,
+                customerPhone: phone || '+91 99980 21446',
+                billingAddress: address,
+                installationAddress: address,
+              },
+              calculation: {
+                totalBill: billAmt,
+                subtotal,
+                tax: taxAmount,
+              },
             });
 
             // B) Auto Delivery Challan
@@ -457,90 +581,162 @@ export function normalizeTallyToLeadData(
     if (cleanText.startsWith('{') || cleanText.startsWith('[')) {
       try {
         const parsedJson = JSON.parse(cleanText);
+        const raw = parsedJson.data || parsedJson;
 
-        if (parsedJson.customers || parsedJson.vendors || parsedJson.storeStock || parsedJson.inventory || parsedJson.invoices) {
-          if (Array.isArray(parsedJson.customers)) {
-            parsedJson.customers.forEach((c: any) => {
-              const custId = c.customerId || c.id || idGen.generateId('C');
-              customers.push({
-                id: custId,
-                customMiddleId: c.customMiddleId || dateResolution.dateKey,
-                externalName: c.externalName || c.name || 'Customer Master',
-                internalName: c.internalName || `${c.externalName || c.name || 'Customer'} - Tally Master Ledger`,
-                phone: c.phoneNumber || c.phone || '',
-                email: c.email || '',
-                openingBalance: round2(parseFloat(c.openingBalance) || 0),
-                currentBalance: round2(parseFloat(c.currentBalance) || parseFloat(c.openingBalance) || 0),
-                accountBalance: round2(parseFloat(c.currentBalance) || parseFloat(c.openingBalance) || 0),
-                billingAddress: c.billingAddress || 'Store Pickup',
-                installationAddress: c.installationAddress || 'Same as Billing Address',
-                gstin: c.gstin || '',
-                pan: c.pan || '',
-                accessPin: c.portalAccessPin || custId.slice(-4),
-                transactions: Array.isArray(c.transactions) ? c.transactions : [],
-                createdAt: c.createdAt || dateResolution.formattedDate,
-              });
+        const customerArr = raw.customers || raw.debtors || [];
+        const vendorArr = raw.vendors || raw.creditors || raw.payables || [];
+        const stockArr = raw.inventory || raw.storeStock || raw.stock || raw.stockItems || [];
+        const invoiceArr = raw.bills || raw.invoices || [];
+        const deliveryArr = raw.deliveries || raw.div || raw.shipments || [];
+        const transactionArr = raw.transactions || raw.receipts || raw.inflows || [];
+
+        if (Array.isArray(customerArr)) {
+          customerArr.forEach((c: any) => {
+            const normalized = normalizeCustomer(c);
+            const custId = normalized.id;
+            customers.push({
+              id: custId,
+              customMiddleId: c.customMiddleId || dateResolution.dateKey,
+              externalName: normalized.externalName,
+              internalName: c.internalName || `${normalized.externalName} - Tally Master Ledger`,
+              phone: normalized.phone,
+              email: normalized.email,
+              openingBalance: round2(normalized.openingBalance),
+              currentBalance: round2(normalized.currentBalance),
+              accountBalance: round2(normalized.currentBalance),
+              billingAddress: normalized.billingAddress || 'Store Pickup',
+              installationAddress: c.installationAddress || 'Same as Billing Address',
+              gstin: normalized.gstin,
+              pan: normalized.pan,
+              accessPin: c.portalAccessPin || custId.slice(-4),
+              transactions: normalized.transactions,
+              createdAt: c.createdAt || dateResolution.formattedDate,
             });
-          }
-
-          if (Array.isArray(parsedJson.vendors)) {
-            parsedJson.vendors.forEach((v: any) => {
-              const vId = v.vendorId || v.id || idGen.generateId('V');
-              const vName = v.vendorName || v.externalName || v.name || 'Supplier Master';
-              vendors.push({
-                id: vId,
-                vendorId: vId,
-                vendorName: vName,
-                amountWeOwe: round2(parseFloat(v.amountWeOwe) || parseFloat(v.amount) || 0),
-                category: classifyVendorCategory(vName, v.category || ''),
-                partyPhone: v.partyPhone || v.phoneNumber || v.phone || '',
-                targetDueDate: v.targetDueDate || '15/11/2026',
-                billOrderReferenceNo: v.billOrderReferenceNo || `PO-${vId.slice(-4)}`,
-                notes: v.notes || 'Imported LEA-D Vendor',
-                billingAddress: v.billingAddress || 'GIDC Estate, Ahmedabad',
-                gstin: v.gstin || '',
-                pan: v.pan || '',
-                createdAt: v.createdAt || dateResolution.formattedDate,
-              });
-            });
-          }
-
-          const stockArr = parsedJson.storeStock || parsedJson.inventory;
-          if (Array.isArray(stockArr)) {
-            stockArr.forEach((s: any) => {
-              const sId = s.stockId || s.id || idGen.generateId('STK');
-              const pName = s.productFullName || s.name || '1.5T Inverter Split AC';
-              storeStock.push({
-                id: sId,
-                stockId: sId,
-                sku: s.sku || `SKU-${sId.slice(-6)}-01`,
-                websiteStockId: s.websiteStockId || `WEB-${sId.slice(-6)}`,
-                applianceType: s.applianceType || 'AC',
-                name: pName,
-                productFullName: pName,
-                modelNo: s.modelNo || pName,
-                setModelNumber: s.setModelNumber || pName.replace(/\s+/g, '-').toUpperCase(),
-                type: s.type || s.applianceType || 'AC',
-                brand: (s.brand || 'DAIKIN').toUpperCase(),
-                serialNo: s.serialNo || s.indoorUnitSerial || `IDU-${sId.slice(-6)}`,
-                indoorModel: s.indoorModel || `${pName}-IDU`,
-                indoorUnitSerial: s.indoorUnitSerial || `IDU-${sId.slice(-6)}`,
-                outdoorModel: s.outdoorModel || `${pName}-ODU`,
-                outdoorUnitSerial: s.outdoorUnitSerial || `ODU-${sId.slice(-6)}`,
-                sellingPrice: round2(parseFloat(s.sellingPrice) || 38500),
-                quantity: s.quantity || 1,
-                status: s.status || 'AVAILABLE',
-                stockState: s.stockState || 'ava',
-                hasQrCode: s.hasQrCode !== undefined ? s.hasQrCode : true,
-                createdAt: s.createdAt || dateResolution.formattedDate,
-              });
-            });
-          }
-
-          if (Array.isArray(parsedJson.deliveries)) deliveries.push(...parsedJson.deliveries);
-          if (Array.isArray(parsedJson.invoices)) invoices.push(...parsedJson.invoices);
-          if (Array.isArray(parsedJson.transactions)) transactions.push(...parsedJson.transactions);
+          });
         }
+
+        if (Array.isArray(vendorArr)) {
+          vendorArr.forEach((v: any) => {
+            const vId = v.vendorId || v.id || idGen.generateId('V');
+            const vName = v.vendorName || v.externalName || v.name || 'Supplier Master';
+            vendors.push({
+              id: vId,
+              vendorId: vId,
+              vendorName: vName,
+              amountWeOwe: round2(parseFloat(v.amountWeOwe) || parseFloat(v.amount) || 0),
+              category: classifyVendorCategory(vName, v.category || ''),
+              partyPhone: v.partyPhone || v.phoneNumber || v.phone || '',
+              targetDueDate: v.targetDueDate || '15/11/2026',
+              billOrderReferenceNo: v.billOrderReferenceNo || `PO-${vId.slice(-4)}`,
+              notes: v.notes || 'Imported LEA-D Vendor',
+              billingAddress: v.billingAddress || 'GIDC Estate, Ahmedabad',
+              gstin: v.gstin || '',
+              pan: v.pan || '',
+              createdAt: v.createdAt || dateResolution.formattedDate,
+            });
+          });
+        }
+
+        if (Array.isArray(stockArr)) {
+          stockArr.forEach((s: any) => {
+            const normalized = normalizeStock(s);
+            const sId = normalized.id;
+            const pName = normalized.name;
+            const priceVal = round2(normalized.sellingPrice);
+            const applianceType = normalized.applianceType;
+
+            storeStock.push({
+              id: sId,
+              stockId: sId,
+              sku: s.sku || `SKU-${sId.slice(-6)}-01`,
+              websiteStockId: s.websiteStockId || `WEB-${sId.slice(-6)}`,
+              applianceType,
+              name: pName,
+              productFullName: pName,
+              modelNo: s.modelNo || pName,
+              setModelNumber: s.setModelNumber || pName.replace(/\s+/g, '-').toUpperCase(),
+              type: applianceType,
+              brand: (s.brand || normalized.brand).toUpperCase(),
+              serialNo: s.serialNo || s.indoorUnitSerial || `IDU-${sId.slice(-6)}`,
+              indoorModel: s.indoorModel || `${pName}-IDU`,
+              indoorUnitSerial: s.indoorUnitSerial || `IDU-${sId.slice(-6)}`,
+              outdoorModel: s.outdoorModel || `${pName}-ODU`,
+              outdoorUnitSerial: s.outdoorUnitSerial || `ODU-${sId.slice(-6)}`,
+              rate: priceVal,
+              price: priceVal,
+              sellingPrice: priceVal,
+              quantity: normalized.quantity,
+              status: normalized.status,
+              stockState: normalized.stockState,
+              hasQrCode: s.hasQrCode !== undefined ? s.hasQrCode : true,
+              createdAt: s.createdAt || dateResolution.formattedDate,
+            });
+          });
+        }
+
+        if (Array.isArray(invoiceArr)) {
+          invoiceArr.forEach((inv: any) => {
+            const normalized = normalizeInvoice(inv);
+            const invId = normalized.id;
+            const customBillId = inv.customBillId || inv.billNumber || inv.billNo || inv.linkedQuoteId || inv.paymentTransId || `G00${invId.slice(-4)}`;
+            const custId = normalized.customerId;
+            const custName = normalized.customerName;
+            const custPhone = normalized.customerPhone;
+            const billingAddr = normalized.billingAddress || 'Store Pickup';
+            const installAddr = inv.installationAddress || inv.customer?.installationAddress || billingAddr;
+
+            const totalAmt = round2(normalized.totalAmount);
+            const subtotalAmt = round2(normalized.subtotal);
+            const taxAmt = round2(normalized.tax);
+            const invDate = normalized.invoiceDate;
+
+            invoices.push({
+              id: invId,
+              invoiceId: invId,
+              billId: invId,
+              customBillId,
+              billNumber: customBillId,
+              invoiceDate: invDate,
+              customerId: custId,
+              customerName: custName,
+              customerExternalName: custName,
+              customerPhone: custPhone,
+              billingAddress: billingAddr,
+              installationAddress: installAddr,
+              linkedQuoteId: customBillId,
+              items: normalized.items,
+              subtotal: subtotalAmt,
+              taxAmount: taxAmt,
+              tax: taxAmt,
+              discountAmount: round2(parseFloat(inv.discountAmount || 0)),
+              roundOffAmount: round2(parseFloat(inv.roundOffAmount || 0)),
+              totalAmount: totalAmt,
+              finalAmount: totalAmt,
+              prepaidSplits: inv.prepaidSplits || { fromBalance: 0, upiCash: totalAmt },
+              totalPrepaid: inv.totalPrepaid !== undefined ? round2(parseFloat(inv.totalPrepaid)) : totalAmt,
+              amountDue: inv.amountDue !== undefined ? round2(parseFloat(inv.amountDue)) : 0,
+              paymentStatus: inv.paymentStatus || 'PAID',
+              status: inv.status || 'COMPLETED',
+              notes: inv.notes || `Invoice ${customBillId}`,
+              createdAt: invDate,
+              customer: inv.customer || {
+                customerId: custId,
+                customerLegalName: custName,
+                customerPhone: custPhone,
+                billingAddress: billingAddr,
+                installationAddress: installAddr,
+              },
+              calculation: inv.calculation || {
+                totalBill: totalAmt,
+                subtotal: subtotalAmt,
+                tax: taxAmt,
+              },
+            });
+          });
+        }
+
+        if (Array.isArray(deliveryArr)) deliveries.push(...deliveryArr);
+        if (Array.isArray(transactionArr)) transactions.push(...transactionArr);
       } catch (err) {
         console.error('Failed to parse LEA-D JSON/JS file:', err);
       }
@@ -589,8 +785,11 @@ export function normalizeTallyToLeadData(
     customers,
     vendors,
     storeStock,
+    inventory: storeStock,
+    stock: storeStock,
     deliveries,
     invoices,
+    bills: invoices,
     transactions,
     tallyMasters: masters,
     dateResolution,

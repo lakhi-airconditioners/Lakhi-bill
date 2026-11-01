@@ -1,4 +1,3 @@
-import React from 'react';
 import {
   Shield,
   UserCheck,
@@ -11,6 +10,7 @@ import {
   Lock,
   Sparkles,
   Palette,
+  Keyboard,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 import { LakhiLogo } from './common/LakhiLogo';
@@ -19,12 +19,16 @@ interface HeaderProps {
   onOpenClaimsModal?: () => void;
   onOpenAiAssistant?: () => void;
   onOpenBrandModal?: () => void;
+  onOpenCommandPalette?: () => void;
+  onOpenShortcutsModal?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
   onOpenClaimsModal,
   onOpenAiAssistant,
   onOpenBrandModal,
+  onOpenCommandPalette,
+  onOpenShortcutsModal,
 }) => {
   const {
     currentUser,
@@ -120,6 +124,19 @@ export const Header: React.FC<HeaderProps> = ({
                 <span className="hidden sm:inline">Lakhi AI</span>
                 <span className="sm:hidden text-[10px] font-black">AI</span>
                 <span className="text-[10px] bg-white/20 px-1 py-0.2 rounded font-mono hidden md:inline">Admin</span>
+              </button>
+            )}
+
+            {/* Keyboard Command Palette & Shortcuts Button (Visible only in Staff Operations mode) */}
+            {viewMode === 'STAFF' && isAdmin && (onOpenCommandPalette || onOpenShortcutsModal) && (
+              <button
+                onClick={onOpenCommandPalette || onOpenShortcutsModal}
+                className="flex items-center justify-center w-7.5 h-7.5 sm:w-auto sm:px-2.5 sm:py-1.5 rounded-xl text-xs font-semibold bg-slate-100 dark:bg-slate-900 hover:bg-slate-200 dark:hover:bg-slate-800 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-800 transition-colors shadow-xs shrink-0"
+                title="Command Palette & Keyboard Shortcuts (Press Ctrl+K or ?)"
+                aria-label="Keyboard Shortcuts and Commands"
+              >
+                <Keyboard className="w-3.5 h-3.5 text-slate-600 dark:text-slate-300" />
+                <span className="hidden xl:inline ml-1 text-[11px] font-mono font-bold text-slate-500">⌘K</span>
               </button>
             )}
 
