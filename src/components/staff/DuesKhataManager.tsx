@@ -276,7 +276,7 @@ export const DuesKhataManager: React.FC = () => {
   };
 
   const generateWhatsAppReminder = (summary: CustomerReceivableSummary) => {
-    const cleanPhone = summary.customerPhone.replace(/[^0-9]/g, '');
+    const cleanPhone = String(summary.customerPhone || '').replace(/[^0-9]/g, '');
     const phoneWithCountry = cleanPhone.startsWith('91') ? cleanPhone : `91${cleanPhone}`;
     const invList = summary.pendingInvoices.map((i) => `${i.id} (₹${i.amountDue.toLocaleString('en-IN')})`).join(', ');
     const text = encodeURIComponent(

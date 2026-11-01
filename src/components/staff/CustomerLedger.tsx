@@ -387,7 +387,7 @@ export const CustomerLedger: React.FC = () => {
                             <div className="text-[10px] text-slate-400">{tx.bankOrDrawer}</div>
                           </td>
                           <td className="px-4 py-2.5 font-mono text-slate-600 dark:text-slate-300">
-                            {tx.referenceNo || 'Counter Cash'}
+                            {String(tx.utrRefNoSlip || tx.referenceNo || '').replace(/^UTR\//i, '') || 'Counter Cash'}
                           </td>
                           <td className="px-4 py-2.5">
                             <span
@@ -401,7 +401,7 @@ export const CustomerLedger: React.FC = () => {
                             </span>
                           </td>
                           <td className="px-4 py-2.5 font-black text-emerald-600 dark:text-emerald-400">
-                            +₹{tx.amount.toLocaleString('en-IN')}
+                            +₹{(Number(tx.amountInflow ?? tx.amount) || 0).toLocaleString('en-IN')}
                           </td>
                           <td className="px-4 py-2.5 text-slate-400">
                             {tx.createdAt.slice(0, 10)}

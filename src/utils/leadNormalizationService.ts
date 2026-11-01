@@ -199,26 +199,67 @@ export function normalizeInvoice(raw: any) {
 // 2. Normalize Deliveries (div)
 export function normalizeDelivery(raw: any) {
   if (!raw) raw = {};
+  const driverName = raw.driverName || raw.assignedDriver?.driverName || 'Unassigned';
+  const driverPhone = String(raw.driverPhone || raw.assignedDriver?.driverPhone || '');
+  const vehicleNumber = raw.vehicleNumber || raw.assignedDriver?.vehicleNumber || '';
+  const totalAmount = Number(raw.totalAmount ?? raw.billAmount ?? 0);
+
   return {
     ...raw,
-    id: raw.id || raw.deliveryId || `DIV-${Date.now()}`,
+    id: raw.id || raw.deliveryId || `D-${Date.now()}`,
     deliveryId: raw.deliveryId || raw.id || '',
     customerId: raw.customerId || '',
-    customerName: raw.customerName || '',
+    customerName: raw.customerName || 'Customer',
+    customerPhone: String(raw.customerPhone || raw.phone || ''),
     divState: raw.divState || '1. Order Placed',
+    
+    // Prevent .toLocaleString() crash
+    totalAmount: isNaN(totalAmount) ? 0 : totalAmount,
 
-    // Prevent .map() crash
+    // Prevent .replace() crash on driver & customer details
+    driverName,
+    driverPhone,
+    vehicleNumber,
+    assignedDriver: {
+      driverName,
+      driverPhone,
+      vehicleNumber,
+      assignedAt: raw.assignedDriver?.assignedAt || ''
+    },
+
+    // Prevent .map() crashes
     linkedInvoiceIds: Array.isArray(raw.linkedInvoiceIds)
       ? raw.linkedInvoiceIds
-      : raw.linkedInvoiceId
-      ? [raw.linkedInvoiceId]
-      : [],
-    messageNotes: Array.isArray(raw.messageNotes) ? raw.messageNotes : [],
+      : (raw.linkedInvoiceId ? [raw.linkedInvoiceId] : []),
+    messageNotes: Array.isArray(raw.messageNotes) ? raw.messageNotes : []
+  };
+}
 
-    // Prevent .replace() crash on driver phone
-    driverName: raw.driverName || raw.assignedDriver?.driverName || 'Unassigned',
-    driverPhone: raw.driverPhone || raw.assignedDriver?.driverPhone || '',
-    vehicleNumber: raw.vehicleNumber || raw.assignedDriver?.vehicleNumber || '',
+// 2b. Normalize Transactions (trans)
+export function normalizeTransaction(raw: any) {
+  if (!raw) raw = {};
+  const amount = Number(raw.amountInflow ?? raw.amount ?? raw.totalAmount ?? 0);
+
+  return {
+    ...raw,
+    id: raw.id || raw.transId || `T-${Date.now()}`,
+    transId: raw.transId || raw.id || '',
+    customerId: raw.customerId || '',
+    customerName: raw.customerName || 'Customer',
+    customerPhone: String(raw.customerPhone || raw.phone || ''),
+    
+    // Prevent .toLocaleString() crash
+    amountInflow: isNaN(amount) ? 0 : amount,
+    amount: isNaN(amount) ? 0 : amount,
+
+    // Prevent .replace() crash on reference codes and timestamps
+    mode: raw.mode || 'UPI Transfer',
+    bankDrawer: raw.bankDrawer || 'Main Drawer 1',
+    bankOrDrawer: raw.bankOrDrawer || raw.bankDrawer || 'Main Drawer 1',
+    utrRefNoSlip: String(raw.utrRefNoSlip || raw.referenceNo || ''),
+    referenceNo: String(raw.referenceNo || raw.utrRefNoSlip || ''),
+    treatment: raw.treatment || 'LINK_DIRECTLY_TO_INVOICE',
+    timestamp: String(raw.timestamp || raw.createdAt || new Date().toLocaleString())
   };
 }
 
@@ -735,8 +776,8 @@ export function normalizeTallyToLeadData(
           });
         }
 
-        if (Array.isArray(deliveryArr)) deliveries.push(...deliveryArr);
-        if (Array.isArray(transactionArr)) transactions.push(...transactionArr);
+        if (Array.isArray(deliveryArr)) deliveries.push(...deliveryArr.map(normalizeDelivery));
+        if (Array.isArray(transactionArr)) transactions.push(...transactionArr.map(normalizeTransaction));
       } catch (err) {
         console.error('Failed to parse LEA-D JSON/JS file:', err);
       }

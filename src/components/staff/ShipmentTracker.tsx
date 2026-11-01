@@ -513,8 +513,8 @@ export const ShipmentTracker: React.FC<ShipmentTrackerProps> = ({
                       </h3>
                       <div className="text-xs text-slate-500 font-mono mt-0.5 flex items-center gap-1.5">
                         <Phone className="w-3 h-3 text-slate-400" />
-                        <a href={`tel:${s.customerPhone}`} className="hover:underline">
-                          {s.customerPhone}
+                        <a href={`tel:${(s.customerPhone || '').replace(/\D/g, '')}`} className="hover:underline">
+                          {s.customerPhone || 'N/A'}
                         </a>
                       </div>
                     </div>
@@ -688,14 +688,14 @@ export const ShipmentTracker: React.FC<ShipmentTrackerProps> = ({
                         <User className="w-3.5 h-3.5 text-slate-400" />
                         <div>
                           <div className="font-bold text-slate-900 dark:text-white">
-                            {s.driverName || 'Driver Not Assigned Yet'}
+                            {s.driverName || s.assignedDriver?.driverName || 'Driver Not Assigned Yet'}
                           </div>
-                          {s.driverPhone ? (
+                          {(s.driverPhone || s.assignedDriver?.driverPhone) ? (
                             <a
-                              href={`tel:${s.driverPhone}`}
+                              href={`tel:${String(s.driverPhone || s.assignedDriver?.driverPhone || '').replace(/\D/g, '')}`}
                               className="text-[11px] text-red-600 dark:text-red-400 font-mono hover:underline"
                             >
-                              📞 {s.driverPhone}
+                              📞 {s.driverPhone || s.assignedDriver?.driverPhone}
                             </a>
                           ) : (
                             <span className="text-[10px] text-slate-400 italic">No driver phone</span>
