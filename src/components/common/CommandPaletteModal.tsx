@@ -112,14 +112,14 @@ export const CommandPaletteModal: React.FC<CommandPaletteModalProps> = ({
         },
       },
       {
-        id: 'nav-lead-hub',
+        id: 'nav-sdbm-hub',
         category: 'Navigation',
-        label: '⚡ LA-D Data Hub',
-        description: 'Import/Export LA-D files, automatic bill & DIV sync',
+        label: '⚡ SDBM Data Hub',
+        description: 'Import/Export SDBM files, automatic bill & DIV sync (New format coming soon)',
         icon: Zap,
         shortcut: 'Alt+5',
         action: () => {
-          onNavigateTab('lead_hub');
+          onNavigateTab('sdbm_hub');
           onClose();
         },
       },

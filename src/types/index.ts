@@ -377,7 +377,7 @@ export interface UserAccount {
   updatedAt: string;
 }
 
-// LEA-D 4.0 Master References & Full System Bundle
+// SDBM 1.0 Master References & Full System Bundle (Store Data & Billing Manager)
 export interface TallyMastersData {
   godowns: string[];
   stockGroups: string[];
@@ -387,7 +387,7 @@ export interface TallyMastersData {
   expenseLedgers: string[];
 }
 
-export interface LeadCompleteSystemData {
+export interface SdbmCompleteSystemData {
   companyInfo: {
     companyName: string;
     storeGstin: string;
@@ -407,4 +407,7 @@ export interface LeadCompleteSystemData {
   transactions: TransactionRecord[];
   tallyMasters: TallyMastersData;
 }
+
+// Backwards compatibility alias
+export type LeadCompleteSystemData = SdbmCompleteSystemData;
 

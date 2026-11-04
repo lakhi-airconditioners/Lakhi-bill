@@ -49,7 +49,7 @@ export const KeyboardShortcutsModal: React.FC<KeyboardShortcutsModalProps> = ({
         { keys: ['Alt', '2'], singleKey: '2', label: 'Quotations & Estimates (Q...)', icon: FileCheck2 },
         { keys: ['Alt', '3'], singleKey: '3', label: 'Tax Invoices & Billing (I...)', icon: Receipt },
         { keys: ['Alt', '4'], singleKey: '4', label: 'Store Stock & Godown (STK)', icon: Boxes },
-        { keys: ['Alt', '5'], singleKey: '5', label: '⚡ LA-D Data Hub', icon: Zap },
+        { keys: ['Alt', '5'], singleKey: '5', label: '⚡ SDBM Data Hub', icon: Zap },
         { keys: ['Alt', '6'], singleKey: '6', label: 'Deliveries & Tracking (D...)', icon: Truck },
         { keys: ['Alt', '7'], singleKey: '7', label: 'Customers & Ledger (C / T...)', icon: Users },
         { keys: ['Alt', '8'], singleKey: '8', label: 'Who Owes Who (Dues & Khata)', icon: Scale },

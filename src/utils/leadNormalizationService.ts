@@ -820,7 +820,7 @@ export function normalizeTallyToLeadData(
       storeGstin: STORE_CONSTANTS.storeGstin,
       storeHelpline: STORE_CONSTANTS.storeHelpline,
       baseDate: dateResolution.dateKey,
-      version: 'LEA-D 4.0 Standard',
+      version: 'SDBM 1.0 Standard (Store Data & Billing Manager)',
     },
     dateKey: dateResolution.dateKey,
     customers,
@@ -837,21 +837,28 @@ export function normalizeTallyToLeadData(
   };
 }
 
+// Primary SDBM Normalization function alias
+export const normalizeTallyToSdbmData = normalizeTallyToLeadData;
+export const SdbmIdGenerator = LeadIdGenerator;
+
 /**
- * Generate clean JSON text export file: LA_D_Complete_System.txt
+ * Generate clean JSON text export file: SDBM_Complete_System.txt
  */
-export function generateLeadCompleteSystemTxt(data: LeadCompleteSystemData): string {
+export function generateSdbmCompleteSystemTxt(data: any): string {
   return JSON.stringify(data, null, 2);
 }
 
+// Backwards compatibility alias
+export const generateLeadCompleteSystemTxt = generateSdbmCompleteSystemTxt;
+
 /**
- * Generate Universal CommonJS/AMD JavaScript module: LA_D_Complete_System.js
+ * Generate Universal CommonJS/AMD JavaScript module: SDBM_Complete_System.js
  */
-export function generateLeadCompleteSystemJs(data: LeadCompleteSystemData): string {
+export function generateSdbmCompleteSystemJs(data: any): string {
   const jsonPayload = JSON.stringify(data, null, 2);
 
   return `/**
- * LEA-D 4.0 Universal System Data Module
+ * SDBM 1.0 Universal System Data Module (Store Data & Billing Manager)
  * Company: LAKHI ELECTRONICS AIRCONDITIONERS
  * GSTIN: 24AAIPU5764D1ZI | Helpline: +91 99980 21446
  * Dynamic Date Key: ${data.companyInfo.baseDate}
@@ -862,7 +869,7 @@ export function generateLeadCompleteSystemJs(data: LeadCompleteSystemData): stri
   } else if (typeof module === 'object' && module.exports) {
     module.exports = factory();
   } else {
-    root.LEADSystem = factory();
+    root.SDBMSystem = factory();
   }
 }(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
@@ -889,54 +896,13 @@ export function generateLeadCompleteSystemJs(data: LeadCompleteSystemData): stri
       return systemData.vendors.filter(function (v) {
         return (v.vendorId && v.vendorId.toLowerCase().indexOf(q) !== -1) ||
                (v.vendorName && v.vendorName.toLowerCase().indexOf(q) !== -1) ||
-               (v.category && v.category.toLowerCase().indexOf(q) !== -1) ||
-               (v.gstin && v.gstin.toLowerCase().indexOf(q) !== -1);
+               (v.partyPhone && v.partyPhone.indexOf(q) !== -1);
       });
-    },
-    searchStock: function (query) {
-      if (!query) return systemData.storeStock;
-      var q = query.toLowerCase();
-      return systemData.storeStock.filter(function (s) {
-        return (s.id && s.id.toLowerCase().indexOf(q) !== -1) ||
-               (s.name && s.name.toLowerCase().indexOf(q) !== -1) ||
-               (s.brand && s.brand.toLowerCase().indexOf(q) !== -1) ||
-               (s.serialNo && s.serialNo.toLowerCase().indexOf(q) !== -1);
-      });
-    },
-    recordStoreInflow: function (customerId, amount, mode, utr) {
-      var transId = 'T' + systemData.companyInfo.baseDate + Math.floor(1000 + Math.random() * 9000);
-      var record = {
-        id: transId,
-        transId: transId,
-        transType: 'Record Store Inflow',
-        customerId: customerId,
-        amountInflow: amount,
-        amount: amount,
-        mode: mode || 'UPI Transfer',
-        bankDrawer: 'HDFC Bank',
-        bankOrDrawer: 'HDFC Bank',
-        utrRefNoSlip: utr || 'UTR-LOCAL-GEN',
-        treatment: 'ADDED_TO_BALANCE',
-        createdAt: '27/10/2026'
-      };
-      systemData.transactions.push(record);
-
-      var cust = systemData.customers.find(function (c) { return c.id === customerId; });
-      if (cust) {
-        cust.currentBalance = (cust.currentBalance || 0) + amount;
-        cust.accountBalance = cust.currentBalance;
-        if (!cust.transactions) cust.transactions = [];
-        cust.transactions.push(record);
-      }
-      return record;
-    },
-    generateId: function (type) {
-      var prefix = type.toUpperCase();
-      var validPrefixes = ['I', 'Q', 'STK', 'D', 'C', 'T', 'V'];
-      if (validPrefixes.indexOf(prefix) === -1) prefix = 'C';
-      return prefix + systemData.companyInfo.baseDate + Math.floor(1000 + Math.random() * 9000);
     }
   };
 }));
 `;
 }
+
+// Backwards compatibility alias
+export const generateLeadCompleteSystemJs = generateSdbmCompleteSystemJs;

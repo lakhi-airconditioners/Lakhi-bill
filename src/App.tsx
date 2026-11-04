@@ -153,7 +153,7 @@ function MainApp() {
           setActiveStaffTab('inventory');
         } else if (key === '5') {
           e.preventDefault();
-          setActiveStaffTab('lead_hub');
+          setActiveStaffTab('sdbm_hub');
         } else if (key === '6') {
           e.preventDefault();
           setActiveStaffTab('shipments');
@@ -219,7 +219,7 @@ function MainApp() {
             '2': 'quotations',
             '3': 'invoices',
             '4': 'inventory',
-            '5': 'lead_hub',
+            '5': 'sdbm_hub',
             '6': 'shipments',
             '7': 'customers',
             '8': 'khata',
@@ -375,7 +375,7 @@ function MainApp() {
               />
             )}
 
-            {activeStaffTab === 'lead_hub' && <TallyPrimeManager />}
+            {(activeStaffTab === 'sdbm_hub' || activeStaffTab === 'lead_hub') && <TallyPrimeManager />}
 
             {activeStaffTab === 'shipments' && (
               <ShipmentTracker
