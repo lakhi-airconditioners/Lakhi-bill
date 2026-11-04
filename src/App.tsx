@@ -15,7 +15,7 @@ import { OfflineIndicator } from './components/common/OfflineIndicator';
 import { Quotation, Invoice } from './types';
 import { BrandLogoManager } from './components/staff/BrandLogoManager';
 import { BrandLogoModal } from './components/common/BrandLogoModal';
-import { TallyPrimeManager } from './components/staff/TallyPrimeManager';
+import { SdbmManager } from './components/staff/SdbmManager';
 import { StaffNavigation } from './components/staff/StaffNavigation';
 import {
   Zap,
@@ -375,7 +375,7 @@ function MainApp() {
               />
             )}
 
-            {(activeStaffTab === 'sdbm_hub' || activeStaffTab === 'lead_hub') && <TallyPrimeManager />}
+            {(activeStaffTab === 'sdbm_hub' || activeStaffTab === 'lead_hub') && <SdbmManager />}
 
             {activeStaffTab === 'shipments' && (
               <ShipmentTracker

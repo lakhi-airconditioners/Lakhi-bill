@@ -8,8 +8,8 @@ import {
   Shipment,
   Invoice,
   TransactionRecord,
-  TallyMastersData,
-  LeadCompleteSystemData,
+  SdbmMastersData,
+  SdbmCompleteSystemData,
 } from '../types';
 
 export const STORE_CONSTANTS = {
@@ -29,15 +29,18 @@ export function round2(val: number): number {
 }
 
 /**
- * Clean raw text / XML string from bad escape artifacts and control bytes
+ * Clean raw text string from bad escape artifacts and control bytes
  */
-export function cleanTallyRawText(raw: string): string {
+export function cleanSdbmRawText(raw: string): string {
   if (!raw) return '';
   return raw
-    .replace(/&#[0-9]+;/g, '') // strip numeric entities like &#4; &#27;
+    .replace(/&#[0-9]+;/g, '') // strip numeric entities
     .replace(/&#x[0-9a-fA-F]+;/g, '') // strip hex entities
     .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, ''); // strip ASCII control bytes
 }
+
+// Backwards compatibility alias
+export const cleanTallyRawText = cleanSdbmRawText;
 
 /**
  * Dynamically resolves the 8-digit date key (YYYYMMDD)
@@ -305,15 +308,15 @@ export function normalizeStock(raw: any) {
 }
 
 /**
- * Main Data Normalization Engine: Transform raw Tally payload (XML/CSV/JSON/TXT)
- * strictly into LEA-D 4.0 deterministic structures.
+ * Main Data Normalization Engine: Transform raw payload
+ * strictly into SDBM deterministic structures.
  * DYNAMIC DATE KEYING & AUTO BILL/DELIVERY/INFLOW GENERATION
  */
-export function normalizeTallyToLeadData(
+export function normalizeSdbmData(
   rawInput: string,
   providedDateKey?: string
-): LeadCompleteSystemData & { dateResolution: { dateKey: string; formattedDate: string; source: string } } {
-  const cleaned = cleanTallyRawText(rawInput);
+): SdbmCompleteSystemData & { dateResolution: { dateKey: string; formattedDate: string; source: string } } {
+  const cleaned = cleanSdbmRawText(rawInput);
   const dateResolution = providedDateKey ? { dateKey: providedDateKey, formattedDate: '27/10/2026', source: 'Manual Override' } : resolveDynamicDateKey(cleaned);
   const idGen = new LeadIdGenerator(dateResolution.dateKey);
 
@@ -324,7 +327,7 @@ export function normalizeTallyToLeadData(
   const invoices: Invoice[] = [];
   const transactions: TransactionRecord[] = [];
 
-  const masters: TallyMastersData = {
+  const masters: SdbmMastersData = {
     godowns: ['Main Showroom Godown', 'Central Warehouse'],
     stockGroups: ['DAIKIN', 'OGENERAL', 'MITSUBISHI', 'VOLTAS', 'CARRIER', 'BLUE STAR'],
     unitsOfMeasure: ['SET', 'PCS', 'NOS', 'UNT'],
@@ -428,7 +431,7 @@ export function normalizeTallyToLeadData(
             partyPhone: phone,
             targetDueDate: '15/11/2026',
             billOrderReferenceNo: `PO-${vendorId.slice(-4)}`,
-            notes: `Tally Master Import from ${parent}`,
+            notes: `SDBM Master Import from ${parent}`,
             billingAddress: address,
             gstin: gstin || '',
             pan: pan || '',
@@ -584,7 +587,7 @@ export function normalizeTallyToLeadData(
             id: customerId,
             customMiddleId,
             externalName: name,
-            internalName: `${name} - Tally Master Ledger`,
+            internalName: `${name} - SDBM Master Ledger`,
             phone: phone || '+91 98250 27209',
             email: isCorp ? `billing@${name.toLowerCase().replace(/[^a-z]/g, '')}.com` : '',
             openingBalance: round2(absBal),
@@ -639,7 +642,7 @@ export function normalizeTallyToLeadData(
               id: custId,
               customMiddleId: c.customMiddleId || dateResolution.dateKey,
               externalName: normalized.externalName,
-              internalName: c.internalName || `${normalized.externalName} - Tally Master Ledger`,
+              internalName: c.internalName || `${normalized.externalName} - SDBM Master Ledger`,
               phone: normalized.phone,
               email: normalized.email,
               openingBalance: round2(normalized.openingBalance),
@@ -832,13 +835,15 @@ export function normalizeTallyToLeadData(
     invoices,
     bills: invoices,
     transactions,
+    sdbmMasters: masters,
     tallyMasters: masters,
     dateResolution,
   };
 }
 
-// Primary SDBM Normalization function alias
-export const normalizeTallyToSdbmData = normalizeTallyToLeadData;
+// Primary SDBM Normalization function aliases
+export const normalizeTallyToSdbmData = normalizeSdbmData;
+export const normalizeTallyToLeadData = normalizeSdbmData;
 export const SdbmIdGenerator = LeadIdGenerator;
 
 /**

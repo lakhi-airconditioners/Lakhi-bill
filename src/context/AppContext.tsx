@@ -1625,7 +1625,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const payload = cleanFirestorePayload({
         ...data,
         id: docId,
-        createdAt: data.createdAt || new Date().toISOString(),
+        ...(data.createdAt !== undefined ? { createdAt: data.createdAt } : {}),
       });
       await setDoc(doc(db, collectionName, docId), payload);
       return docId;

@@ -2,7 +2,7 @@ export type IdTypePrefix = 'I' | 'Q' | 'STK' | 'D' | 'C' | 'T' | 'V';
 
 export interface Customer {
   id: string; // e.g., C202610271137
-  internalName: string; // Staff dealer notes / alias (e.g. "Sharma Ji - Tally Master Ledger")
+  internalName: string; // Staff dealer notes / alias (e.g. "Sharma Ji - SDBM Master Ledger")
   externalName: string; // Official legal name shown on bills and portal
   phone: string;
   email?: string;
@@ -378,7 +378,7 @@ export interface UserAccount {
 }
 
 // SDBM 1.0 Master References & Full System Bundle (Store Data & Billing Manager)
-export interface TallyMastersData {
+export interface SdbmMastersData {
   godowns: string[];
   stockGroups: string[];
   unitsOfMeasure: string[];
@@ -405,9 +405,11 @@ export interface SdbmCompleteSystemData {
   invoices: Invoice[];
   bills?: Invoice[];
   transactions: TransactionRecord[];
-  tallyMasters: TallyMastersData;
+  sdbmMasters: SdbmMastersData;
+  tallyMasters?: SdbmMastersData;
 }
 
-// Backwards compatibility alias
+// Backwards compatibility aliases
+export type TallyMastersData = SdbmMastersData;
 export type LeadCompleteSystemData = SdbmCompleteSystemData;
 
